@@ -781,3 +781,83 @@ body.mode-sidebar {
 	color: var(--vscode-textLink-activeForeground);
 	text-decoration: underline;
 }
+
+/* ---- Search (#147) ---------------------------------------------------- */
+
+.search-bar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 12px;
+	border-bottom: 1px solid var(--vscode-panel-border, transparent);
+	flex: none;
+}
+
+.search-input {
+	flex: 1;
+	min-width: 120px;
+	color: var(--vscode-input-foreground);
+	background: var(--vscode-input-background);
+	border: 1px solid var(--vscode-input-border, transparent);
+	font: inherit;
+	padding: 3px 6px;
+	outline: none;
+}
+
+.search-input:focus {
+	border-color: var(--vscode-focusBorder);
+}
+
+.search-count {
+	min-width: 5em;
+	white-space: nowrap;
+	color: var(--vscode-descriptionForeground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.search-count.error {
+	color: var(--vscode-errorForeground);
+}
+
+.search-history {
+	white-space: nowrap;
+}
+
+.search-help {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	line-height: 16px;
+	text-align: center;
+	border-radius: 50%;
+	border: 1px solid var(--vscode-descriptionForeground);
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+	cursor: help;
+}
+
+.row.commit.match {
+	background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.2));
+}
+
+.row.commit.current-match {
+	background: var(--vscode-editor-findMatchBackground, rgba(234, 92, 0, 0.4));
+	outline: 1px solid var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder));
+	outline-offset: -1px;
+}
+
+.row.commit.selected.match {
+	background: var(--vscode-list-inactiveSelectionBackground);
+}
+
+.subject mark {
+	color: inherit;
+	background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+	border-radius: 2px;
+}
+
+.mode-sidebar .search-bar {
+	padding: 4px 8px;
+	flex-wrap: wrap;
+}

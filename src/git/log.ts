@@ -143,6 +143,17 @@ export function buildLogArgs(request: LogRequest, supportsExclude: boolean): str
 }
 
 /**
+ * `git log` arguments listing just the hashes of a request's history, in
+ * display order, NUL-separated: the log's own arguments with the format
+ * swapped. Used to find where a commit sits in the graph before it is loaded.
+ */
+export function buildHashListArgs(request: LogRequest, supportsExclude: boolean, limit: number): string[] {
+	const args = buildLogArgs({ ...request, maxCommits: limit - 1 }, supportsExclude);
+	args[args.indexOf(LOG_FORMAT)] = '--format=%H';
+	return args;
+}
+
+/**
  * Arguments for the ancestry walk that backs `rewriteParents`: the same
  * history as the log, unfiltered, as `hash parent…` lines.
  */

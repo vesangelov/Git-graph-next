@@ -44,6 +44,8 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | Diff documents | `git-graph-next:` URIs, read-only, path = repo-relative file (tab name + language), everything else in the JSON query | Uncommitted diffs use the real `file:` URI on the right, so the diff is editable. |
 | Filtered graphs | Path filter: git rewrites parents (`--parents`). Author filter and `--follow`: **we** rewrite parents (`src/graph/rewrite.ts`) from a `rev-list --parents` walk capped at 50k commits | git leaves original parents for those, so every edge would dangle. Beyond the cap edges trail off rather than attach wrongly. |
 | Author filter semantics | Literal, case-insensitive (`--fixed-strings --regexp-ignore-case`); several authors = OR | Users pick names from suggestions or the context menu; "John (Work)" must not be a regex. Note `--fixed-strings` also applies to `--grep` when both are used. |
+| Search language | GitHub-style operators (`author:`, `committer:`, `message:`, `hash:`, `branch:`, `tag:`, `ref:`, `after:`, `before:`, `date:>…`), quoted phrases, all terms AND, literal and case-insensitive | Asked for in #147 itself. One shared matcher (`src/search/query.ts`) for loaded commits and history, so both agree on what a match is. |
+| History search | git narrows to a *superset* of matches (necessary conditions only), then the shared matcher decides; position from the graph's own hash list (capped at 200k) | Exact semantics without reimplementing them as git arguments. The only risk is under-matching, so narrowing never uses anything that is not strictly necessary. Known gap: free-text words split across different fields (one in the message, one in a ref name) are not found in *unloaded* history. |
 | Filter scope | Per repository, persisted in the panel's webview state; the sidebar never filters | Keeps the sidebar a quick overview. |
 | Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
 | Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
@@ -146,10 +148,22 @@ packaged and installed.** Awaiting live verification.
   touching those paths; under a branch filter excluding HEAD it is hidden.
 - Tests: `test/rewrite.test.ts` (7), 6 new filter integration tests.
 
+Session 5 — search (#147). **74/74 tests pass, `tsc --noEmit` clean,
+packaged and installed.** Awaiting live verification.
+
+- Search bar (Ctrl+F, or "Search" in the toolbar; also works in the sidebar):
+  live matching of loaded commits, matched rows and words highlighted,
+  "3 of 17", Enter/Shift+Enter, F3/Shift+F3, Esc; `?` shows the syntax.
+- "Search older commits": the host finds the next match beyond the loaded
+  rows (`src/git/search.ts`), the view loads up to it and jumps there.
+  Finds tags, authors, messages and hash prefixes anywhere in history.
+- `toLogRequest` extracted from `loadGraphData`; `buildHashListArgs` in log.ts.
+- Tests: `test/search.test.ts` (13: parser, matcher, history search).
+
 ### Not started
 
 Rest of Phase 2: exclude globs (#360), extra `git log` args (#591), pinned
-branch columns (#207), tag filter (#465), advanced search (#147), etc.
+branch columns (#207), tag filter (#465), etc.
 
 ---
 
@@ -241,7 +255,7 @@ Structurally already supported by `LogFilter` / `layoutGraph`; they need UI.
 - [ ] #207 — persistent branches get a dedicated column → `pinnedBranches`
 - [ ] #254 — branch colour on all commits → first-parent colour inheritance
 - [ ] #465 — filter by tag
-- [ ] #147 — advanced search
+- [x] #147 — advanced search
 - [ ] #387 — collapsible graph sections
 - [ ] #313 — richer issue linking
 - [ ] #475 — display git notes
@@ -351,3 +365,18 @@ parent rewriting.
 
 **Next action:** fix whatever the live check finds; then the remaining Phase 2
 items — search in loaded commits (#147) is probably the most visible next.
+
+### Session 5 — 2026-09-21
+
+**Goal:** search (#147).
+
+The user verified the filters live and committed them. Read #147 (via the
+GitHub API) before designing: it asks for GitHub-style operators, and the
+comments ask to find tags that are not in the loaded commits. Both built.
+
+**Stopped at:** search built, installed, awaiting the user's live check.
+
+**Next action:** fix whatever the live check finds; then the remaining Phase 2
+items. Proposed order: exclude globs (#360) and extra log args (#591) as
+settings (small), then pinned branch columns (#207, layout already supports
+`pinnedBranches`).

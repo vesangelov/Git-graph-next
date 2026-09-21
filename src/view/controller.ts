@@ -4,6 +4,8 @@ import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GitExecutor } from '../git/executor.ts';
 import { loadGraphData } from '../git/graphData.ts';
+import { searchHistory } from '../git/search.ts';
+import { parseQuery } from '../search/query.ts';
 import type { RepoManager } from '../repoManager.ts';
 import { graphDataRequest, openToActiveEditorRepo, viewConfig } from '../config.ts';
 import type { ChangesService } from './changesView.ts';
@@ -189,6 +191,23 @@ export class GraphController implements vscode.Disposable {
 				} catch (error) {
 					const text = error instanceof Error ? error.message : String(error);
 					this.post({ type: 'changes', repo: target.repo, hash: target.hash, changes: null, error: text });
+				}
+				break;
+			}
+			case 'searchHistory': {
+				const { requestId, options } = message;
+				const query = parseQuery(message.query);
+				if (query === null) {
+					this.post({ type: 'searchResult', requestId, match: null, error: null });
+					break;
+				}
+				try {
+					const request = graphDataRequest(options, followsRenames(options));
+					const useCommitDate = viewConfig().dateType === 'Commit Date';
+					const match = await searchHistory(this.services.git, options.repo, request, query, message.fromPosition, useCommitDate);
+					this.post({ type: 'searchResult', requestId, match, error: null });
+				} catch (error) {
+					this.post({ type: 'searchResult', requestId, match: null, error: error instanceof Error ? error.message : String(error) });
 				}
 				break;
 			}

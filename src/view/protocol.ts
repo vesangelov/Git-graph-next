@@ -48,6 +48,13 @@ export type HostMessage =
 	| { readonly type: 'setFilter'; readonly repo: string; readonly filter: Partial<FilterState> }
 	| { readonly type: 'error'; readonly repo: string | null; readonly message: string }
 	| {
+			readonly type: 'searchResult';
+			readonly requestId: number;
+			/** The match and its index among log commits, or null when history holds no further match. */
+			readonly match: { readonly hash: Hash; readonly position: number } | null;
+			readonly error: string | null;
+	  }
+	| {
 			readonly type: 'changes';
 			readonly repo: string;
 			readonly hash: Hash;
@@ -89,6 +96,12 @@ export type WebviewMessage =
 	/** The user selected a row; the host loads its changed files. */
 	| { readonly type: 'selectCommit'; readonly target: ChangeTarget; readonly title: string }
 	| { readonly type: 'openDiff'; readonly target: ChangeTarget; readonly change: FileChange }
+	/**
+	 * Searches history beyond the loaded commits for the first match at or
+	 * after `fromPosition` (an index among log commits), with the same
+	 * options the graph was loaded with.
+	 */
+	| { readonly type: 'searchHistory'; readonly requestId: number; readonly options: LoadOptions; readonly query: string; readonly fromPosition: number }
 	/** Opens the working-tree version of a repo-relative path. */
 	| { readonly type: 'openFile'; readonly repo: string; readonly path: string };
 

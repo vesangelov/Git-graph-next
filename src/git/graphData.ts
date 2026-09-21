@@ -117,6 +117,23 @@ export function existingBranches(selected: readonly string[], refs: RefsResult):
 	return selected.filter((ref) => known.has(ref));
 }
 
+/**
+ * The `git log` request behind a graph request. Shared with history search,
+ * which must walk exactly the commits the graph shows, in the same order.
+ */
+export function toLogRequest(request: GraphDataRequest, refs: RefsResult, headHash: Hash | null): LogRequest {
+	return {
+		filter: { ...request.filter, branches: existingBranches(request.filter.branches, refs) },
+		maxCommits: request.maxCommits,
+		ordering: request.ordering,
+		onlyFollowFirstParent: request.onlyFollowFirstParent,
+		includeCommitsMentionedByReflogs: request.includeCommitsMentionedByReflogs,
+		followRenames: request.followRenames,
+		includeStashes: false,
+		includeHead: headHash !== null
+	};
+}
+
 /** Loads the complete data set for one repository's graph view. */
 export async function loadGraphData(git: GitExecutor, repoPath: string, request: GraphDataRequest): Promise<GraphData> {
 	const refReader = new GitRefReader(git, repoPath);
@@ -137,17 +154,8 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 	]);
 	const refs = await refReader.readRefs(remotes);
 
-	const branches = existingBranches(request.filter.branches, refs);
-	const logRequest: LogRequest = {
-		filter: { ...request.filter, branches },
-		maxCommits: request.maxCommits,
-		ordering: request.ordering,
-		onlyFollowFirstParent: request.onlyFollowFirstParent,
-		includeCommitsMentionedByReflogs: request.includeCommitsMentionedByReflogs,
-		followRenames: request.followRenames,
-		includeStashes: false,
-		includeHead: state.headHash !== null
-	};
+	const logRequest = toLogRequest(request, refs, state.headHash);
+	const { branches } = logRequest.filter;
 	const pathFiltered = logRequest.filter.paths.length > 0;
 	const rewrite = needsParentRewriting(logRequest);
 

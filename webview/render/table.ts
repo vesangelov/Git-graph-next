@@ -121,6 +121,8 @@ export class CommitTable {
 	/** The window currently in the DOM, to skip redundant redraws while scrolling. */
 	private drawn: { first: number; last: number } | null = null;
 	private frame = 0;
+	/** Search matches to mark, the one to emphasise, and the words to highlight. */
+	private search: { matches: ReadonlySet<Hash>; current: Hash | null; terms: readonly string[] } | null = null;
 
 	/**
 	 * @param compact Sidebar mode: only the graph and description columns, with
@@ -172,6 +174,21 @@ export class CommitTable {
 
 	get selectedHash(): Hash | null {
 		return this.selected;
+	}
+
+	/** Marks search matches; null clears them. */
+	setSearch(search: { matches: ReadonlySet<Hash>; current: Hash | null; terms: readonly string[] } | null): void {
+		this.search = search;
+		this.drawn = null;
+		this.draw();
+	}
+
+	/** Scrolls a commit into view without selecting it. Returns false when it is not loaded. */
+	scrollTo(hash: Hash): boolean {
+		const index = this.model?.data.commits.findIndex((c) => c.hash === hash) ?? -1;
+		if (index === -1) return false;
+		this.scrollRowIntoView(index);
+		return true;
 	}
 
 	/** Selects a commit and scrolls it into view. Returns false when it is not loaded. */
@@ -276,6 +293,10 @@ export class CommitTable {
 		if (commit.hash === this.selected) element.classList.add('selected');
 		if (commit.hash === UNCOMMITTED) element.classList.add('uncommitted');
 		if (commit.hash === model.data.repo.headHash) element.classList.add('head');
+		if (this.search?.matches.has(commit.hash) === true) {
+			element.classList.add('match');
+			if (commit.hash === this.search.current) element.classList.add('current-match');
+		}
 
 		element.appendChild(el('div', 'cell graph'));
 
@@ -294,7 +315,8 @@ export class CommitTable {
 			}
 			desc.appendChild(tag);
 		}
-		const subject = el('span', 'subject', commit.subject);
+		const subject = el('span', 'subject');
+		appendHighlighted(subject, commit.subject, this.search?.matches.has(commit.hash) === true ? this.search.terms : []);
 		subject.title = commit.body === '' ? commit.subject : `${commit.subject}\n\n${commit.body}`;
 		if (this.compact && commit.hash !== UNCOMMITTED) {
 			const when = formatDate(model.config.dateType === 'Commit Date' ? commit.committerDate : commit.authorDate, model.config.dateFormat);
@@ -377,6 +399,35 @@ export class CommitTable {
 		this.drawn = null;
 		this.scheduleDraw();
 	}
+}
+
+/**
+ * Appends `text` with every occurrence of `terms` (lower-case) wrapped in
+ * <mark>. Built from text nodes, so commit content never becomes markup.
+ */
+export function appendHighlighted(parent: HTMLElement, text: string, terms: readonly string[]): void {
+	if (terms.length === 0) {
+		parent.textContent = text;
+		return;
+	}
+	const lower = text.toLowerCase();
+	// Mark ranges, merged where terms overlap.
+	const ranges: [number, number][] = [];
+	for (const term of terms) {
+		for (let at = lower.indexOf(term); at !== -1; at = lower.indexOf(term, at + term.length)) ranges.push([at, at + term.length]);
+	}
+	ranges.sort((a, b) => a[0] - b[0]);
+	let cursor = 0;
+	for (const [start, end] of ranges) {
+		if (end <= cursor) continue;
+		const from = Math.max(start, cursor);
+		if (from > cursor) parent.append(text.slice(cursor, from));
+		const mark = document.createElement('mark');
+		mark.textContent = text.slice(from, end);
+		parent.append(mark);
+		cursor = end;
+	}
+	if (cursor < text.length) parent.append(text.slice(cursor));
 }
 
 /** Creates an element; text goes through textContent, never HTML, so commit content cannot inject markup. */

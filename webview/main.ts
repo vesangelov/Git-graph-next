@@ -1,7 +1,9 @@
 import { layoutGraph } from '../src/graph/layout.ts';
-import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GraphData } from '../src/types.ts';
+import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GraphData, type Hash } from '../src/types.ts';
 import { NO_FILTER, isFiltered, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
 import { FilterControls } from './filters.ts';
+import { SearchBar, type SearchStatus } from './search.ts';
+import { highlightTerms, matchesQuery, parseQuery, type SearchQuery, type SearchRef } from '../src/search/query.ts';
 import { DetailsPane, changeTarget } from './details.ts';
 import { shortHash } from './format.ts';
 import { ContextMenu, type MenuItem } from './menu.ts';
@@ -105,7 +107,41 @@ const filters = new FilterControls({
 	}
 });
 
-toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, filters.toggleButton, refreshButton);
+const searchButton = el('button', 'icon-button filter-toggle', 'Search');
+searchButton.title = 'Search commits (Ctrl+F)';
+
+toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, searchButton, filters.toggleButton, refreshButton);
+
+/** Search state (#147). Matches are hashes in row order; `index` points at the current one. */
+const search = {
+	query: null as SearchQuery | null,
+	matches: [] as Hash[],
+	index: -1,
+	history: 'idle' as SearchStatus['history'],
+	error: null as string | null,
+	requestId: 0,
+	/** A match found in history, to jump to once the graph has loaded up to it. */
+	pendingReveal: null as Hash | null
+};
+
+const searchBar = new SearchBar({
+	onQuery: (text) => {
+		search.query = parseQuery(text);
+		search.history = 'idle';
+		search.error = null;
+		runSearch(false);
+	},
+	onNext: () => nextMatch(),
+	onPrevious: () => previousMatch(),
+	onSearchHistory: () => searchHistory(),
+	onClose: () => {
+		searchBar.close();
+		search.query = null;
+		runSearch(false);
+		table.element.focus();
+	}
+});
+searchButton.addEventListener('click', () => (searchBar.isOpen ? searchBar.close() : openSearch()));
 
 const message = el('div', 'message');
 message.hidden = true;
@@ -144,8 +180,9 @@ if (mode === 'sidebar') {
 	filters.branchButton.hidden = true;
 	filters.toggleButton.hidden = true;
 	filters.bar.hidden = true;
+	searchButton.hidden = true;
 }
-app.append(toolbar, filters.bar, message, table.element, details.element, menu.element, filters.popupElement);
+app.append(toolbar, filters.bar, searchBar.element, message, table.element, details.element, menu.element, filters.popupElement);
 if (mode === 'panel') filters.set(currentFilter());
 
 // ---- Behaviour ------------------------------------------------------------
@@ -154,15 +191,13 @@ function showRemoteBranches(): boolean {
 	return state.showRemoteBranches ?? state.config?.showRemoteBranches ?? true;
 }
 
+function loadOptions(repo: string, config: ViewConfig, maxCommits: number): LoadOptions {
+	return { repo, maxCommits, showRemoteBranches: showRemoteBranches(), showTags: config.showTags, filter: currentFilter() };
+}
+
 function request(maxCommits: number): void {
 	if (state.repo === null || state.config === null) return;
-	const options: LoadOptions = {
-		repo: state.repo,
-		maxCommits,
-		showRemoteBranches: showRemoteBranches(),
-		showTags: state.config.showTags,
-		filter: currentFilter()
-	};
+	const options = loadOptions(state.repo, state.config, maxCommits);
 	state.loading = true;
 	post({ type: 'load', options });
 	render();
@@ -193,7 +228,120 @@ function switchRepo(repo: string | null): void {
 	state.loading = false;
 	table.clear();
 	details.close();
+	search.history = 'idle';
+	search.pendingReveal = null;
 	if (mode === 'panel') filters.set(currentFilter());
+}
+
+// ---- Search ---------------------------------------------------------------
+
+function openSearch(): void {
+	searchBar.open();
+	if (searchBar.text !== '' && search.query === null) {
+		search.query = parseQuery(searchBar.text);
+		runSearch(false);
+	}
+}
+
+/** The refs on a commit, as the search matcher sees them. */
+function searchRefs(labels: readonly RefLabel[]): SearchRef[] {
+	const refs: SearchRef[] = [];
+	for (const label of labels) {
+		refs.push({ name: label.name, kind: label.kind === 'head' ? 'branch' : label.kind });
+		// Remote branches folded into a local label are still searchable by their own name.
+		for (const remote of label.remotes) refs.push({ name: `${remote}/${label.name}`, kind: 'remote' });
+	}
+	return refs;
+}
+
+/**
+ * Re-evaluates the query against the loaded commits. `keepCurrent` keeps the
+ * current match after a reload when it is still there; a match found in
+ * history takes priority, since that is what the reload was for.
+ */
+function runSearch(keepCurrent: boolean): void {
+	const data = state.data;
+	const config = state.config;
+	const previous = search.matches[search.index] ?? null;
+	if (search.query === null || data === null || config === null) {
+		search.matches = [];
+		search.index = -1;
+		table.setSearch(null);
+		updateSearchStatus();
+		return;
+	}
+	const query = search.query;
+	const labels = buildLabels(data, config);
+	const useCommitDate = config.dateType === 'Commit Date';
+	search.matches = data.commits
+		.filter((c) => c.hash !== UNCOMMITTED && matchesQuery(query, c, searchRefs(labels.get(c.hash) ?? []), useCommitDate))
+		.map((c) => c.hash);
+
+	let index = -1;
+	if (search.pendingReveal !== null && search.matches.includes(search.pendingReveal)) {
+		index = search.matches.indexOf(search.pendingReveal);
+		search.pendingReveal = null;
+		keepCurrent = false;
+	} else if (keepCurrent && previous !== null) {
+		index = search.matches.indexOf(previous);
+	}
+	if (index === -1 && search.matches.length > 0) index = 0;
+	search.index = index;
+	showMatch(!keepCurrent);
+}
+
+/** Next loaded match; past the last one, the next match in history, else wrap around. */
+function nextMatch(): void {
+	if (search.matches.length > 0 && search.index < search.matches.length - 1) moveMatch(search.index + 1);
+	else if (state.data?.moreAvailable === true && search.history !== 'exhausted') searchHistory();
+	else if (search.matches.length > 0) moveMatch(0);
+}
+
+function previousMatch(): void {
+	if (search.matches.length > 0) moveMatch((search.index - 1 + search.matches.length) % search.matches.length);
+}
+
+function moveMatch(index: number): void {
+	search.index = index;
+	showMatch(true);
+}
+
+function showMatch(scroll: boolean): void {
+	const current = search.matches[search.index] ?? null;
+	table.setSearch(search.query === null ? null : { matches: new Set(search.matches), current, terms: highlightTerms(search.query) });
+	if (scroll && current !== null) table.scrollTo(current);
+	updateSearchStatus();
+}
+
+function updateSearchStatus(): void {
+	searchBar.setStatus(
+		{
+			current: search.index,
+			total: search.matches.length,
+			moreAvailable: state.data?.moreAvailable === true,
+			history: search.history,
+			error: search.error
+		},
+		search.query !== null
+	);
+}
+
+/** Asks the host for the next match beyond the loaded commits. */
+function searchHistory(): void {
+	const data = state.data;
+	if (search.query === null || data === null || state.config === null || state.repo === null || search.history === 'searching') return;
+	search.history = 'searching';
+	search.error = null;
+	search.requestId++;
+	const loaded = data.commits.filter((c) => c.hash !== UNCOMMITTED && c.stash === null).length;
+	post({
+		type: 'searchHistory',
+		requestId: search.requestId,
+		options: loadOptions(state.repo, state.config, data.maxCommits),
+		query: searchBar.text,
+		fromPosition: loaded
+	});
+	updateSearchStatus();
 }
 
 function loadMore(): void {
@@ -339,6 +487,7 @@ function showGraph(data: GraphData): void {
 	table.element.hidden = data.commits.length === 0;
 	table.setData(data, layout, config);
 	syncDetails(data);
+	if (search.query !== null) runSearch(true);
 	if (state.restoreScrollTop !== null) {
 		table.scrollTop = state.restoreScrollTop;
 		state.restoreScrollTop = null;
@@ -411,6 +560,22 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 			state.error = null;
 			showGraph(msg.data);
 			break;
+		case 'searchResult': {
+			if (msg.requestId !== search.requestId) return;
+			if (msg.error !== null) {
+				search.history = 'error';
+				search.error = msg.error;
+			} else if (msg.match === null) {
+				search.history = 'exhausted';
+			} else if (state.data !== null && state.config !== null) {
+				search.history = 'idle';
+				search.pendingReveal = msg.match.hash;
+				// Load past the match, with a page to spare so it is not the last row.
+				request(Math.max(state.data.maxCommits, msg.match.position + 1 + state.config.loadMoreCommits));
+			}
+			updateSearchStatus();
+			return;
+		}
 		case 'changes':
 			if (msg.repo === state.repo) details.showChanges(msg.hash, msg.changes, msg.error);
 			return;
@@ -431,6 +596,18 @@ repoSelect.addEventListener('change', () => {
 });
 
 document.addEventListener('keydown', (event) => {
+	if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
+		event.preventDefault();
+		openSearch();
+		return;
+	}
+	if (event.key === 'F3' && searchBar.isOpen) {
+		event.preventDefault();
+		searchBar.flush();
+		if (event.shiftKey) previousMatch();
+		else nextMatch();
+		return;
+	}
 	if (event.key === 'Escape' && details.isOpen) details.close();
 });
 
