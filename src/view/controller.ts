@@ -1,12 +1,28 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 import type { GitExecutor } from '../git/executor.ts';
 import { loadGraphData } from '../git/graphData.ts';
 import type { RepoManager } from '../repoManager.ts';
 import { graphDataRequest, openToActiveEditorRepo, viewConfig } from '../config.ts';
 import type { ChangesService } from './changesView.ts';
 import { openChangeDiff, openWorkingFile } from './diff.ts';
-import type { HostMessage, LoadOptions, ViewMode, WebviewMessage } from './protocol.ts';
+import type { FilterState, HostMessage, LoadOptions, ViewMode, WebviewMessage } from './protocol.ts';
+
+/**
+ * A single file is followed across renames (#70). Folders cannot be: git's
+ * `--follow` accepts exactly one file. A path that no longer exists was a file
+ * that got deleted, so it is followed too.
+ */
+function followsRenames(options: LoadOptions): boolean {
+	if (options.filter.paths.length !== 1) return false;
+	try {
+		return !statSync(join(options.repo, options.filter.paths[0])).isDirectory();
+	} catch {
+		return true;
+	}
+}
 
 /** Quiet period after the last file change before the graph reloads. */
 const REFRESH_DEBOUNCE_MS = 750;
@@ -54,6 +70,8 @@ export class GraphController implements vscode.Disposable {
 	private ready = false;
 	/** Repository to switch to once the webview reports it is ready. */
 	private pendingRepo: string | null;
+	/** Filter to apply once the webview reports it is ready. */
+	private pendingFilter: { repo: string; filter: Partial<FilterState> } | null = null;
 
 	/** Reloads every open graph view. */
 	static refreshAll(): void {
@@ -94,6 +112,17 @@ export class GraphController implements vscode.Disposable {
 	selectRepo(repo: string): void {
 		if (this.ready) this.postRepos(repo);
 		else this.pendingRepo = repo;
+	}
+
+	/** Shows `repo` with parts of its filter replaced, e.g. a path for "View File History". */
+	applyFilter(repo: string, filter: Partial<FilterState>): void {
+		if (this.ready) {
+			this.postRepos(repo);
+			this.post({ type: 'setFilter', repo, filter });
+		} else {
+			this.pendingRepo = repo;
+			this.pendingFilter = { repo, filter };
+		}
 	}
 
 	reload(): void {
@@ -141,7 +170,9 @@ export class GraphController implements vscode.Disposable {
 				this.post({ type: 'config', config: viewConfig() });
 				// A repository requested by a command beats the one the webview remembers.
 				this.postRepos(this.pendingRepo ?? message.repo);
+				if (this.pendingFilter !== null) this.post({ type: 'setFilter', ...this.pendingFilter });
 				this.pendingRepo = null;
+				this.pendingFilter = null;
 				break;
 			case 'load':
 				await this.load(message.options);
@@ -182,7 +213,7 @@ export class GraphController implements vscode.Disposable {
 		this.post({ type: 'loading', repo: options.repo });
 
 		try {
-			const data = await loadGraphData(this.services.git, options.repo, graphDataRequest(options));
+			const data = await loadGraphData(this.services.git, options.repo, graphDataRequest(options, followsRenames(options)));
 			if (generation === this.loadGeneration) this.post({ type: 'graph', data });
 		} catch (error) {
 			if (generation !== this.loadGeneration) return;

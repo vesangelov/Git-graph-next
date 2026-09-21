@@ -44,6 +44,8 @@ export type HostMessage =
 	  }
 	| { readonly type: 'loading'; readonly repo: string }
 	| { readonly type: 'graph'; readonly data: GraphData }
+	/** Replaces parts of a repository's filter, e.g. from "View File History". Switches to that repository. */
+	| { readonly type: 'setFilter'; readonly repo: string; readonly filter: Partial<FilterState> }
 	| { readonly type: 'error'; readonly repo: string | null; readonly message: string }
 	| {
 			readonly type: 'changes';
@@ -53,12 +55,29 @@ export type HostMessage =
 			readonly error: string | null;
 	  };
 
+/** The filters chosen in the view's filter bar, kept per repository. */
+export interface FilterState {
+	/** Full ref names (`refs/heads/main`, `refs/remotes/origin/main`); empty shows all (#760). */
+	readonly branches: readonly string[];
+	/** Author names or e-mail fragments, matched literally and case-insensitively (#171). */
+	readonly authors: readonly string[];
+	/** Repo-relative files or folders, forward slashes (#70). */
+	readonly paths: readonly string[];
+}
+
+export const NO_FILTER: FilterState = { branches: [], authors: [], paths: [] };
+
+export function isFiltered(filter: FilterState): boolean {
+	return filter.branches.length > 0 || filter.authors.length > 0 || filter.paths.length > 0;
+}
+
 /** What the webview asks the graph to be loaded with. */
 export interface LoadOptions {
 	readonly repo: string;
 	readonly maxCommits: number;
 	readonly showRemoteBranches: boolean;
 	readonly showTags: boolean;
+	readonly filter: FilterState;
 }
 
 /** Webview → host. */
@@ -80,4 +99,6 @@ export interface PersistedViewState {
 	readonly showRemoteBranches: boolean | null;
 	/** Height of the commit details pane, once the user has resized it. */
 	readonly detailsHeight?: number | null;
+	/** Filters per repository path. */
+	readonly filters?: Readonly<Record<string, FilterState>>;
 }

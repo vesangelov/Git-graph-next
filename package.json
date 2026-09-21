@@ -51,6 +51,12 @@
         "icon": "$(git-branch)"
       },
       {
+        "command": "gitGraphNext.viewFileHistory",
+        "title": "View File History in Git Graph",
+        "category": "Git Graph Next",
+        "icon": "$(git-branch)"
+      },
+      {
         "command": "gitGraphNext.refresh",
         "title": "Refresh Git Graph",
         "category": "Git Graph Next",
@@ -125,6 +131,11 @@
           "command": "gitGraphNext.viewForRepo",
           "group": "gitGraphNext@1",
           "when": "gitGraphNext.enabled && explorerResourceIsFolder"
+        },
+        {
+          "command": "gitGraphNext.viewFileHistory",
+          "group": "gitGraphNext@2",
+          "when": "gitGraphNext.enabled && resourceScheme == file"
         }
       ],
       "view/title": [
@@ -159,6 +170,27 @@
           "command": "gitGraphNext.copyChangePath",
           "when": "view == gitGraphNext.changesView",
           "group": "2_copy@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "gitGraphNext.viewFileHistory",
+          "group": "navigation@100",
+          "when": "config.git-graph-next.showEditorTitleIcon && gitGraphNext.enabled && resourceScheme == file"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "gitGraphNext.viewFileHistory",
+          "group": "gitGraphNext@1",
+          "when": "gitGraphNext.enabled && resourceScheme == file"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "gitGraphNext.viewFileHistory",
+          "group": "gitGraphNext@1",
+          "when": "gitGraphNext.enabled && resourceScheme == file"
         }
       ]
     },

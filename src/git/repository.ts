@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, realpathSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { GitExecutor } from './executor.ts';
 
 /**
@@ -38,12 +38,18 @@ export function repositoryInfo(path: string): RepositoryInfo {
 }
 
 /**
- * Returns the working tree root containing `folder`, or null when the folder is
- * not inside a repository (or is inside the `.git` directory itself, where
+ * Returns the working tree root containing `path` (a folder or a file), or null
+ * when it is not inside a repository (or is inside the `.git` directory itself, where
  * `--show-toplevel` fails).
  */
-export async function findEnclosingRepository(git: GitExecutor, folder: string): Promise<string | null> {
-	if (!existsSync(folder)) return null;
+export async function findEnclosingRepository(git: GitExecutor, path: string): Promise<string | null> {
+	let folder: string;
+	try {
+		// git must run in a directory; for a file, ask about the folder holding it.
+		folder = statSync(path).isDirectory() ? path : dirname(path);
+	} catch {
+		return null;
+	}
 	const output = await git.runOrNull(folder, ['rev-parse', '--show-toplevel']);
 	const root = output?.trim() ?? '';
 	return root === '' ? null : resolve(root);

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { relative, sep } from 'node:path';
 import { GitExecutor } from './git/executor.ts';
 import { RepoManager } from './repoManager.ts';
 import { GraphPanel, VIEW_TYPE } from './view/panel.ts';
@@ -59,6 +60,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('gitGraphNext.refresh', () => GraphController.refreshAll()),
+
+		// History of a file or folder (#70): the Explorer passes the clicked
+		// resource, the editor title passes the document, the palette nothing.
+		vscode.commands.registerCommand('gitGraphNext.viewFileHistory', async (uri?: vscode.Uri) => {
+			const target = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
+			if (target === undefined || target.scheme !== 'file') {
+				void vscode.window.showInformationMessage('Open a file, or right-click one in the Explorer, to view its history.');
+				return;
+			}
+			const repo = repos.repositoryFor(target.fsPath) ?? (await repos.add(target.fsPath));
+			if (repo === null) {
+				void vscode.window.showWarningMessage(`"${target.fsPath}" is not inside a Git repository.`);
+				return;
+			}
+			const path = relative(repo.path, target.fsPath).split(sep).join('/');
+			if (path === '') return open(repo.path);
+			GraphPanel.show(services, repo.path, { paths: [path], authors: [], branches: [] });
+		}),
 
 		// Changes view items. Invoked with the clicked item as the argument.
 		vscode.commands.registerCommand('gitGraphNext.openChangeDiff', (item?: ChangeItem) => {

@@ -1,6 +1,7 @@
 import { layoutGraph } from '../src/graph/layout.ts';
 import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GraphData } from '../src/types.ts';
-import type { HostMessage, LoadOptions, PersistedViewState, RepoOption, ViewConfig, ViewMode, WebviewMessage } from '../src/view/protocol.ts';
+import { NO_FILTER, isFiltered, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
+import { FilterControls } from './filters.ts';
 import { DetailsPane, changeTarget } from './details.ts';
 import { shortHash } from './format.ts';
 import { ContextMenu, type MenuItem } from './menu.ts';
@@ -15,6 +16,9 @@ declare function acquireVsCodeApi(): VsCodeApi;
 
 const vscode = acquireVsCodeApi();
 const mode: ViewMode = document.body.dataset.mode === 'sidebar' ? 'sidebar' : 'panel';
+
+/** Delay before a filter change reloads, so ticking several branches in a row loads once. */
+const FILTER_DEBOUNCE_MS = 300;
 
 /** Delay before a keyboard-driven selection loads its files, so holding ↓ does not queue a load per row. */
 const SELECT_DEBOUNCE_MS = 120;
@@ -31,7 +35,11 @@ const state = {
 	showRemoteBranches: null as boolean | null,
 	/** Scroll position to apply once the first graph for the restored repo arrives. */
 	restoreScrollTop: null as number | null,
-	detailsHeight: null as number | null
+	detailsHeight: null as number | null,
+	/** Filter per repository path. The sidebar never filters. */
+	filters: {} as Record<string, FilterState>,
+	/** Author names seen per repository, offered as filter suggestions. */
+	authors: new Map<string, Set<string>>()
 };
 
 const saved = vscode.getState();
@@ -40,6 +48,11 @@ if (saved !== undefined) {
 	state.showRemoteBranches = saved.showRemoteBranches;
 	state.restoreScrollTop = saved.scrollTop;
 	state.detailsHeight = saved.detailsHeight ?? null;
+	if (mode === 'panel') state.filters = { ...saved.filters };
+}
+
+function currentFilter(): FilterState {
+	return (state.repo !== null ? state.filters[state.repo] : undefined) ?? NO_FILTER;
 }
 
 function post(message: WebviewMessage): void {
@@ -54,7 +67,8 @@ function persist(): void {
 			repo: state.repo,
 			scrollTop: table.scrollTop,
 			showRemoteBranches: state.showRemoteBranches,
-			detailsHeight: state.detailsHeight
+			detailsHeight: state.detailsHeight,
+			filters: state.filters
 		});
 	}, 200);
 }
@@ -80,7 +94,18 @@ const spacer = el('span', 'spacer');
 const refreshButton = el('button', 'icon-button', '⟳');
 refreshButton.title = 'Refresh';
 
-toolbar.append(repoLabel, remoteLabel, spacer, statusText, refreshButton);
+let filterTimer = 0;
+const filters = new FilterControls({
+	onChange: (filter) => {
+		if (state.repo === null) return;
+		state.filters[state.repo] = filter;
+		persist();
+		clearTimeout(filterTimer);
+		filterTimer = window.setTimeout(applyFilterChange, FILTER_DEBOUNCE_MS);
+	}
+});
+
+toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, filters.toggleButton, refreshButton);
 
 const message = el('div', 'message');
 message.hidden = true;
@@ -116,8 +141,12 @@ if (mode === 'sidebar') {
 	remoteLabel.hidden = true;
 	statusText.hidden = true;
 	refreshButton.hidden = true;
+	filters.branchButton.hidden = true;
+	filters.toggleButton.hidden = true;
+	filters.bar.hidden = true;
 }
-app.append(toolbar, message, table.element, details.element, menu.element);
+app.append(toolbar, filters.bar, message, table.element, details.element, menu.element, filters.popupElement);
+if (mode === 'panel') filters.set(currentFilter());
 
 // ---- Behaviour ------------------------------------------------------------
 
@@ -131,7 +160,8 @@ function request(maxCommits: number): void {
 		repo: state.repo,
 		maxCommits,
 		showRemoteBranches: showRemoteBranches(),
-		showTags: state.config.showTags
+		showTags: state.config.showTags,
+		filter: currentFilter()
 	};
 	state.loading = true;
 	post({ type: 'load', options });
@@ -143,6 +173,27 @@ function reload(): void {
 	// Keep however many commits are already on screen, so a refresh never
 	// pulls the rows out from under the user's scroll position.
 	request(Math.max(state.config.maxCommits, state.data?.repo.path === state.repo ? state.data.maxCommits : 0));
+}
+
+/** A new filter starts from the top with the initial page size, not the grown one. */
+function applyFilterChange(): void {
+	if (state.config === null) return;
+	details.close();
+	state.data = null;
+	table.clear();
+	table.scrollTop = 0;
+	request(state.config.maxCommits);
+}
+
+/** Switches repository (dropping the old one's rows) and shows its own filter. */
+function switchRepo(repo: string | null): void {
+	state.repo = repo;
+	state.data = null;
+	state.error = null;
+	state.loading = false;
+	table.clear();
+	details.close();
+	if (mode === 'panel') filters.set(currentFilter());
 }
 
 function loadMore(): void {
@@ -197,9 +248,19 @@ function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 		const what = { head: 'Branch Name', remote: 'Branch Name', tag: 'Tag Name', stash: 'Stash Name' }[label.kind];
 		items.push({ label: `Copy ${what}`, action: copy(label.name, what.toLowerCase()) }, { separator: true });
 	}
+	if (mode === 'panel' && label !== null && (label.kind === 'head' || label.kind === 'remote')) {
+		const ref = label.kind === 'head' ? `refs/heads/${label.name}` : `refs/remotes/${label.name}`;
+		items.push({ label: 'Show Only This Branch', action: () => filters.update({ branches: [ref] }) }, { separator: true });
+	}
 	if (commit.hash === UNCOMMITTED) {
 		items.push({ label: 'Copy Summary', action: copy(commit.subject, 'summary') });
 		return items;
+	}
+	if (mode === 'panel' && commit.stash === null && commit.author !== '') {
+		const current = currentFilter().authors;
+		if (!current.includes(commit.author)) {
+			items.push({ label: `Filter by Author "${commit.author}"`, action: () => filters.update({ authors: [...current, commit.author] }) }, { separator: true });
+		}
 	}
 	items.push(
 		{ label: 'Copy Commit Hash', action: copy(commit.hash, 'commit hash') },
@@ -234,7 +295,7 @@ function render(): void {
 	else if (data !== null) {
 		const count = data.commits.filter((c) => c.hash !== UNCOMMITTED && c.stash === null).length;
 		const head = data.repo.isDetached ? 'detached HEAD' : data.repo.head;
-		text = `${count}${data.moreAvailable ? '+' : ''} commits · ${head ?? ''}`;
+		text = `${count}${data.moreAvailable ? '+' : ''} commits${isFiltered(currentFilter()) ? ' (filtered)' : ''} · ${head ?? ''}`;
 		if (data.repo.pendingOperation !== null) text += ` · ${data.repo.pendingOperation} in progress`;
 	}
 	statusText.textContent = text;
@@ -245,7 +306,7 @@ function render(): void {
 	} else if (state.error !== null) {
 		note = state.error;
 	} else if (data !== null && data.commits.length === 0) {
-		note = 'This repository has no commits yet.';
+		note = isFiltered(currentFilter()) ? 'No commits match the current filter.' : 'This repository has no commits yet.';
 	}
 	message.textContent = note ?? '';
 	message.hidden = note === null;
@@ -268,6 +329,12 @@ function showGraph(data: GraphData): void {
 	const layout = layoutGraph(data.commits, { colourCount: config.colours.length, uncommittedHash: UNCOMMITTED });
 	const switchedRepo = state.data?.repo.path !== data.repo.path;
 	state.data = data;
+	if (mode === 'panel') {
+		let known = state.authors.get(data.repo.path);
+		if (known === undefined) state.authors.set(data.repo.path, (known = new Set()));
+		for (const commit of data.commits) if (commit.hash !== UNCOMMITTED && commit.stash === null) known.add(commit.author);
+		filters.setData(data, [...known].sort((a, b) => a.localeCompare(b)));
+	}
 	// Unhide before measuring: a hidden element has no size and ignores scrollTop.
 	table.element.hidden = data.commits.length === 0;
 	table.setData(data, layout, config);
@@ -314,16 +381,25 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 			if (switched) {
 				// The remembered scroll position belongs to the remembered repository only.
 				if (msg.selected !== saved?.repo) state.restoreScrollTop = null;
-				state.repo = msg.selected;
-				state.data = null;
-				state.error = null;
-				state.loading = false;
-				table.clear();
-				details.close();
+				switchRepo(msg.selected);
 			}
 			renderRepos();
 			persist();
 			if (state.repo !== null && (switched || (state.data === null && !state.loading))) reload();
+			break;
+		}
+		case 'setFilter': {
+			if (mode !== 'panel') return;
+			if (msg.repo !== state.repo) {
+				state.restoreScrollTop = null;
+				switchRepo(msg.repo);
+				renderRepos();
+			}
+			const filter = { ...currentFilter(), ...msg.filter };
+			state.filters[msg.repo] = filter;
+			filters.set(filter);
+			persist();
+			applyFilterChange();
 			break;
 		}
 		case 'loading':
@@ -348,12 +424,8 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 });
 
 repoSelect.addEventListener('change', () => {
-	state.repo = repoSelect.value;
-	state.data = null;
-	state.error = null;
 	state.restoreScrollTop = null;
-	table.clear();
-	details.close();
+	switchRepo(repoSelect.value);
 	persist();
 	reload();
 });

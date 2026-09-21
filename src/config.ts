@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { ViewConfig } from './view/protocol.ts';
+import type { LoadOptions, ViewConfig } from './view/protocol.ts';
 import type { GraphDataRequest } from './git/graphData.ts';
 import { emptyFilter } from './types.ts';
 
@@ -84,10 +84,18 @@ export function openToActiveEditorRepo(): boolean {
 }
 
 /** Builds the loader request for the options the webview asked for. */
-export function graphDataRequest(options: { maxCommits: number; showRemoteBranches: boolean; showTags: boolean }): GraphDataRequest {
+export function graphDataRequest(options: LoadOptions, followRenames: boolean): GraphDataRequest {
 	const ordering = oneOf('commitOrdering', ['date', 'author-date', 'topological'], 'date');
 	return {
-		filter: { ...emptyFilter(), showRemoteBranches: options.showRemoteBranches, showTags: options.showTags },
+		filter: {
+			...emptyFilter(),
+			showRemoteBranches: options.showRemoteBranches,
+			showTags: options.showTags,
+			branches: options.filter.branches,
+			authors: options.filter.authors,
+			paths: options.filter.paths
+		},
+		followRenames,
 		maxCommits: Math.max(1, Math.floor(options.maxCommits)),
 		ordering,
 		onlyFollowFirstParent: read('onlyFollowFirstParent', false),

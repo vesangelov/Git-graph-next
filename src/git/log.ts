@@ -36,34 +36,27 @@ export interface LogResult {
 	readonly moreAvailable: boolean;
 }
 
-/**
- * Builds the `git log` argument list for a request.
- *
- * Exported so it can be unit tested without a repository: argument construction
- * is where filter combinations go wrong, and those bugs are invisible in the UI
- * until someone's history silently omits commits.
- */
-export function buildLogArgs(request: LogRequest, supportsExclude: boolean): string[] {
-	const { filter } = request;
-	const args = ['log', LOG_FORMAT, '-z'];
-
-	// Ask for one more commit than needed, so the caller can tell whether more
-	// history exists without running a second count command.
-	args.push(`-n${request.maxCommits + 1}`);
-
-	switch (request.ordering) {
-		case 'date':
-			args.push('--date-order');
-			break;
+/** The ordering flag for a request, shared by `git log` and the ancestry walk. */
+function orderingArg(ordering: LogRequest['ordering']): string {
+	switch (ordering) {
 		case 'author-date':
-			args.push('--author-date-order');
-			break;
+			return '--author-date-order';
 		case 'topological':
-			args.push('--topo-order');
-			break;
+			return '--topo-order';
+		case 'date':
+		default:
+			return '--date-order';
 	}
+}
 
-	if (request.onlyFollowFirstParent) args.push('--first-parent');
+/**
+ * The starting points of the walk: the selected branches, or every branch,
+ * remote and tag plus HEAD. Shared with the ancestry walk, which must cover
+ * exactly the same history as the log it completes.
+ */
+export function revisionArgs(request: LogRequest, supportsExclude: boolean): string[] {
+	const { filter } = request;
+	const args: string[] = [];
 
 	// --exclude only affects the ref globs that follow it, so it must precede
 	// --all / --branches / --remotes rather than trail them.
@@ -83,8 +76,48 @@ export function buildLogArgs(request: LogRequest, supportsExclude: boolean): str
 		if (request.includeCommitsMentionedByReflogs) args.push('--reflog');
 		if (request.includeStashes) args.push('--glob=refs/stash');
 	}
+	return args;
+}
 
-	for (const author of filter.authors) args.push(`--author=${author}`);
+/**
+ * True when the request drops commits from the middle of history (by author,
+ * message, or a followed file), leaving parents that git does not rewrite.
+ * Such results need `rewriteParents` to be drawn as a connected graph.
+ */
+export function needsParentRewriting(request: LogRequest): boolean {
+	const { filter } = request;
+	return filter.authors.length > 0 || (filter.grep !== null && filter.grep !== '') || followsRenames(request);
+}
+
+function followsRenames(request: LogRequest): boolean {
+	return request.followRenames && request.filter.paths.length === 1;
+}
+
+/**
+ * Builds the `git log` argument list for a request.
+ *
+ * Exported so it can be unit tested without a repository: argument construction
+ * is where filter combinations go wrong, and those bugs are invisible in the UI
+ * until someone's history silently omits commits.
+ */
+export function buildLogArgs(request: LogRequest, supportsExclude: boolean): string[] {
+	const { filter } = request;
+	const args = ['log', LOG_FORMAT, '-z'];
+
+	// Ask for one more commit than needed, so the caller can tell whether more
+	// history exists without running a second count command.
+	args.push(`-n${request.maxCommits + 1}`, orderingArg(request.ordering));
+
+	if (request.onlyFollowFirstParent) args.push('--first-parent');
+	args.push(...revisionArgs(request, supportsExclude));
+
+	if (filter.authors.length > 0) {
+		// Author filters are names the user picked or typed, not regular
+		// expressions: "John (Work)" must match literally, and case-insensitively.
+		// --fixed-strings applies to every limiting pattern, --grep included.
+		args.push('--fixed-strings', '--regexp-ignore-case');
+		for (const author of filter.authors) args.push(`--author=${author}`);
+	}
 	if (filter.grep !== null && filter.grep !== '') {
 		args.push(`--grep=${filter.grep}`, '--regexp-ignore-case');
 	}
@@ -94,13 +127,41 @@ export function buildLogArgs(request: LogRequest, supportsExclude: boolean): str
 	args.push(...filter.extraArgs);
 
 	if (filter.paths.length > 0) {
-		// --follow tracks a file across renames but git only accepts it for a
-		// single path, so it is the caller's job to request it appropriately.
-		if (request.followRenames && filter.paths.length === 1) args.push('--follow');
-		args.push('--', ...filter.paths);
+		// With a pathspec, --parents makes git rewrite each commit's parents to
+		// the nearest ancestor that also touches the paths, so %P names commits
+		// that are in the result and the graph stays connected. --follow does
+		// not get this treatment (see needsParentRewriting); it tracks a file
+		// across renames but git only accepts it for a single path.
+		args.push('--parents');
+		if (followsRenames(request)) args.push('--follow');
 	}
 
+	// Always end revisions explicitly: a branch named like a file in the
+	// working tree is otherwise rejected as an ambiguous argument.
+	args.push('--', ...filter.paths);
 	return args;
+}
+
+/**
+ * Arguments for the ancestry walk that backs `rewriteParents`: the same
+ * history as the log, unfiltered, as `hash parent…` lines.
+ */
+export function buildAncestryArgs(request: LogRequest, supportsExclude: boolean, limit: number): string[] {
+	const args = ['rev-list', '--parents', `-n${limit}`, orderingArg(request.ordering)];
+	if (request.onlyFollowFirstParent) args.push('--first-parent');
+	args.push(...revisionArgs(request, supportsExclude), '--');
+	return args;
+}
+
+/** Parses `git rev-list --parents` output into a parent map. */
+export function parseAncestry(stdout: string): Map<Hash, Hash[]> {
+	const ancestry = new Map<Hash, Hash[]>();
+	for (const line of stdout.split('\n')) {
+		if (line === '') continue;
+		const [hash, ...parents] = line.split(' ');
+		ancestry.set(hash, parents);
+	}
+	return ancestry;
 }
 
 /**
@@ -160,6 +221,15 @@ export class GitLogReader {
 			return { commits: commits.slice(0, request.maxCommits), moreAvailable: true };
 		}
 		return { commits, moreAvailable: false };
+	}
+
+	/**
+	 * Parents of the first `limit` commits of the request's history, ignoring
+	 * its commit-limiting filters. Used to reconnect a filtered graph.
+	 */
+	async ancestry(request: LogRequest, limit: number): Promise<Map<Hash, Hash[]>> {
+		const stdout = await this.git.run(this.repoPath, buildAncestryArgs(request, this.git.atLeast(1, 9), limit));
+		return parseAncestry(stdout);
 	}
 
 	/** Resolves a revision to a full hash, or null when it does not exist. */

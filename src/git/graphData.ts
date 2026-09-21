@@ -1,7 +1,8 @@
 import { basename } from 'node:path';
 import type { GitExecutor } from './executor.ts';
-import { GitLogReader, type LogRequest } from './log.ts';
-import { GitRefReader } from './refs.ts';
+import { GitLogReader, needsParentRewriting, type LogRequest } from './log.ts';
+import { GitRefReader, type RefsResult } from './refs.ts';
+import { rewriteParents } from '../graph/rewrite.ts';
 import { UNCOMMITTED, type Commit, type GraphData, type Hash, type LogFilter, type Stash } from '../types.ts';
 
 export interface GraphDataRequest {
@@ -12,6 +13,8 @@ export interface GraphDataRequest {
 	readonly includeCommitsMentionedByReflogs: boolean;
 	readonly showUncommittedChanges: boolean;
 	readonly showUntrackedFiles: boolean;
+	/** Follow the single path in `filter.paths` across renames. */
+	readonly followRenames: boolean;
 }
 
 /**
@@ -94,6 +97,26 @@ export function uncommittedCommit(headHash: Hash, changes: number): Commit {
 	};
 }
 
+/**
+ * How far the ancestry walk behind a rewritten (author- or follow-filtered)
+ * graph goes. Beyond it, edges trail off instead of reconnecting; the cap
+ * keeps a filter on a huge repository from walking its entire history.
+ */
+const ANCESTRY_LIMIT = 50_000;
+
+/**
+ * Drops branch filter entries that no longer exist (deleted, or a remote
+ * pruned since the filter was chosen). git would reject the whole command
+ * with "bad revision" otherwise.
+ */
+export function existingBranches(selected: readonly string[], refs: RefsResult): string[] {
+	const known = new Set<string>([
+		...refs.heads.map((head) => `refs/heads/${head.name}`),
+		...refs.remoteHeads.map((remote) => `refs/remotes/${remote.name}`)
+	]);
+	return selected.filter((ref) => known.has(ref));
+}
+
 /** Loads the complete data set for one repository's graph view. */
 export async function loadGraphData(git: GitExecutor, repoPath: string, request: GraphDataRequest): Promise<GraphData> {
 	const refReader = new GitRefReader(git, repoPath);
@@ -112,29 +135,48 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 				])
 			: Promise.resolve(null)
 	]);
+	const refs = await refReader.readRefs(remotes);
 
-	const [refs, log] = await Promise.all([
-		refReader.readRefs(remotes),
-		// An empty repository has no HEAD commit and `git log` fails on it;
-		// that is a state to draw, not an error to report.
-		state.headHash === null && (await hasNoCommits(git, repoPath))
-			? Promise.resolve({ commits: [], moreAvailable: false })
-			: logReader.read({
-					filter: request.filter,
-					maxCommits: request.maxCommits,
-					ordering: request.ordering,
-					onlyFollowFirstParent: request.onlyFollowFirstParent,
-					includeCommitsMentionedByReflogs: request.includeCommitsMentionedByReflogs,
-					followRenames: false,
-					includeStashes: false,
-					includeHead: state.headHash !== null
-				})
+	const branches = existingBranches(request.filter.branches, refs);
+	const logRequest: LogRequest = {
+		filter: { ...request.filter, branches },
+		maxCommits: request.maxCommits,
+		ordering: request.ordering,
+		onlyFollowFirstParent: request.onlyFollowFirstParent,
+		includeCommitsMentionedByReflogs: request.includeCommitsMentionedByReflogs,
+		followRenames: request.followRenames,
+		includeStashes: false,
+		includeHead: state.headHash !== null
+	};
+	const pathFiltered = logRequest.filter.paths.length > 0;
+	const rewrite = needsParentRewriting(logRequest);
+
+	// An empty repository has no HEAD commit and `git log` fails on it; that is
+	// a state to draw, not an error to report.
+	const empty = state.headHash === null && (await hasNoCommits(git, repoPath));
+	const [log, ancestry, headInPaths] = await Promise.all([
+		empty ? Promise.resolve({ commits: [], moreAvailable: false }) : logReader.read(logRequest),
+		rewrite && !empty ? logReader.ancestry(logRequest, ANCESTRY_LIMIT) : Promise.resolve(null),
+		// Under a plain path filter, uncommitted changes sit on the newest
+		// commit touching those paths, not on HEAD itself.
+		pathFiltered && !rewrite && state.headHash !== null
+			? git.runOrNull(repoPath, ['log', '-n1', '--format=%H', state.headHash, '--', ...logRequest.filter.paths])
+			: Promise.resolve(null)
 	]);
 
 	let commits = insertStashes(log.commits, stashes);
 	const changes = status !== null ? countStatusEntries(status) : 0;
-	if (changes > 0 && state.headHash !== null) {
-		commits = [uncommittedCommit(state.headHash, changes), ...commits];
+	const uncommittedParent = pathFiltered && !rewrite ? (headInPaths?.trim() || null) : state.headHash;
+	if (changes > 0 && uncommittedParent !== null) {
+		commits = [uncommittedCommit(uncommittedParent, changes), ...commits];
+	}
+	if (ancestry !== null) commits = rewriteParents(commits, ancestry);
+
+	// With a branch selection that leaves out HEAD, the uncommitted row would
+	// hang from a commit that is not drawn; leave it out instead.
+	if (commits[0]?.hash === UNCOMMITTED && branches.length > 0) {
+		const shown = new Set(commits.map((commit) => commit.hash));
+		if (!commits[0].parents.every((parent) => shown.has(parent))) commits = commits.slice(1);
 	}
 
 	return {

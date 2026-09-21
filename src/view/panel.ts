@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { retainContextWhenHidden } from '../config.ts';
 import { GraphController, webviewOptions, type GraphServices } from './controller.ts';
+import type { FilterState } from './protocol.ts';
 
 export const VIEW_TYPE = 'gitGraphNext.view';
 
@@ -14,18 +15,20 @@ export class GraphPanel implements vscode.Disposable {
 	private readonly controller: GraphController;
 	private readonly disposables: vscode.Disposable[] = [];
 
-	/** Opens the graph, or reveals it, optionally switching repository. */
-	static show(services: GraphServices, repo: string | null = null): void {
-		if (GraphPanel.current !== undefined) {
+	/** Opens the graph, or reveals it, optionally switching repository and filter. */
+	static show(services: GraphServices, repo: string | null = null, filter: Partial<FilterState> | null = null): void {
+		if (GraphPanel.current === undefined) {
+			const panel = vscode.window.createWebviewPanel(VIEW_TYPE, 'Git Graph', vscode.ViewColumn.One, {
+				...webviewOptions(services.extensionUri),
+				retainContextWhenHidden: retainContextWhenHidden()
+			});
+			GraphPanel.current = new GraphPanel(panel, services, repo);
+		} else {
 			GraphPanel.current.panel.reveal();
-			if (repo !== null) GraphPanel.current.controller.selectRepo(repo);
-			return;
 		}
-		const panel = vscode.window.createWebviewPanel(VIEW_TYPE, 'Git Graph', vscode.ViewColumn.One, {
-			...webviewOptions(services.extensionUri),
-			retainContextWhenHidden: retainContextWhenHidden()
-		});
-		GraphPanel.current = new GraphPanel(panel, services, repo);
+		const { controller } = GraphPanel.current;
+		if (repo !== null && filter !== null) controller.applyFilter(repo, filter);
+		else if (repo !== null) controller.selectRepo(repo);
 	}
 
 	/** Re-attaches to a panel VS Code restored after a reload or restart. */

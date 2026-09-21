@@ -42,7 +42,8 @@ const request: GraphDataRequest = {
 	onlyFollowFirstParent: false,
 	includeCommitsMentionedByReflogs: false,
 	showUncommittedChanges: true,
-	showUntrackedFiles: true
+	showUntrackedFiles: true,
+	followRenames: false
 };
 
 before(async () => {
@@ -155,4 +156,84 @@ test('discovers the enclosing repository and nested ones within the depth limit'
 
 test('deduplicates repository paths', () => {
 	assert.deepEqual(dedupePaths(['/a/b', '/a/b/', '/a/./b', '/c']), ['/a/b', '/c']);
+});
+
+/**
+ * main: a1(A) ─ b1(B) ─ a2(A) ─────────── merge(A) ─ rename(A) ─ b5(B)
+ *                         └ c2(B) ─ a3f(A) ┘
+ * a.txt is renamed to ren.txt in "rename"; a branch is named like a file.
+ */
+async function filterRepo(): Promise<string> {
+	const repo = initRepo(join(root, 'filters'));
+	const as = (who: string, file: string, line: string, message: string) => {
+		writeFileSync(join(repo, file), line, { flag: 'a' });
+		fixture(repo, 'add', '-A');
+		fixture(repo, '-c', `user.name=${who}`, '-c', `user.email=${who.toLowerCase()}@x`, 'commit', '-q', '-m', message);
+	};
+	as('Alice', 'a.txt', '1\n', 'a1');
+	as('Bob', 'b.txt', '1\n', 'b1');
+	as('Alice', 'a.txt', '2\n', 'a2');
+	fixture(repo, 'checkout', '-q', '-b', 'feature');
+	as('Bob', 'c.txt', '2\n', 'c2');
+	as('Alice', 'a.txt', '3\n', 'a3f');
+	fixture(repo, 'checkout', '-q', 'main');
+	fixture(repo, '-c', 'user.name=Alice', '-c', 'user.email=alice@x', 'merge', '-q', '--no-ff', 'feature', '-m', 'merge');
+	fixture(repo, 'mv', 'a.txt', 'ren.txt');
+	as('Alice', 'ren.txt', '4\n', 'rename');
+	as('Bob', 'b.txt', '5\n', 'b5');
+	fixture(repo, 'branch', 'b.txt');
+	return repo;
+}
+
+/** Every parent of every row is itself a row: the graph has no dangling edges. */
+function assertConnected(commits: readonly Commit[]): void {
+	const shown = new Set(commits.map((c) => c.hash));
+	for (const commit of commits) {
+		for (const parent of commit.parents) assert.ok(shown.has(parent), `${commit.subject} has a parent that is not shown`);
+	}
+}
+
+test('filters by author and reconnects the graph through hidden commits', async () => {
+	const repo = await filterRepo();
+	const data = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), authors: ['alice'] } });
+	assert.deepEqual(data.commits.map((c) => c.subject), ['rename', 'merge', 'a3f', 'a2', 'a1']);
+	assertConnected(data.commits);
+	const byName = new Map(data.commits.map((c) => [c.subject, c]));
+	assert.deepEqual(byName.get('a2')!.parents, [byName.get('a1')!.hash], 'the hidden b1 is skipped');
+	assert.deepEqual(byName.get('a3f')!.parents, [byName.get('a2')!.hash], 'the hidden c2 is skipped');
+});
+
+test('matches author names literally, not as regular expressions', async () => {
+	const repo = join(root, 'filters');
+	const data = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), authors: ['Al.ce'] } });
+	assert.equal(data.commits.length, 0);
+});
+
+test('filters by path with parents rewritten by git', async () => {
+	const repo = join(root, 'filters');
+	const data = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), paths: ['b.txt'] } });
+	assert.deepEqual(data.commits.map((c) => c.subject), ['b5', 'b1']);
+	assertConnected(data.commits);
+});
+
+test('follows a single file across a rename', async () => {
+	const repo = join(root, 'filters');
+	const data = await loadGraphData(git, repo, { ...request, followRenames: true, filter: { ...emptyFilter(), paths: ['ren.txt'] } });
+	assert.deepEqual(data.commits.map((c) => c.subject), ['rename', 'a3f', 'a2', 'a1']);
+	assertConnected(data.commits);
+});
+
+test('filters by branch, including one named like a file', async () => {
+	const repo = join(root, 'filters');
+	const feature = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), branches: ['refs/heads/feature'] } });
+	assert.deepEqual(feature.commits.map((c) => c.subject), ['a3f', 'c2', 'a2', 'b1', 'a1']);
+
+	const fileNamed = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), branches: ['refs/heads/b.txt'] } });
+	assert.equal(fileNamed.commits[0].subject, 'b5');
+});
+
+test('ignores a filtered branch that no longer exists', async () => {
+	const repo = join(root, 'filters');
+	const data = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), branches: ['refs/heads/deleted'] } });
+	assert.equal(data.commits.length, 8, 'with nothing left to select, every branch is shown');
 });
