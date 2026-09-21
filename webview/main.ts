@@ -1,8 +1,10 @@
 import { layoutGraph } from '../src/graph/layout.ts';
-import { UNCOMMITTED, type Commit, type GraphData } from '../src/types.ts';
-import type { HostMessage, LoadOptions, PersistedViewState, RepoOption, ViewConfig, WebviewMessage } from '../src/view/protocol.ts';
+import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GraphData } from '../src/types.ts';
+import type { HostMessage, LoadOptions, PersistedViewState, RepoOption, ViewConfig, ViewMode, WebviewMessage } from '../src/view/protocol.ts';
+import { DetailsPane, changeTarget } from './details.ts';
+import { shortHash } from './format.ts';
 import { ContextMenu, type MenuItem } from './menu.ts';
-import { CommitTable, el, type RefLabel } from './render/table.ts';
+import { CommitTable, buildLabels, el, type RefLabel } from './render/table.ts';
 
 interface VsCodeApi {
 	postMessage(message: WebviewMessage): void;
@@ -12,6 +14,10 @@ interface VsCodeApi {
 declare function acquireVsCodeApi(): VsCodeApi;
 
 const vscode = acquireVsCodeApi();
+const mode: ViewMode = document.body.dataset.mode === 'sidebar' ? 'sidebar' : 'panel';
+
+/** Delay before a keyboard-driven selection loads its files, so holding ↓ does not queue a load per row. */
+const SELECT_DEBOUNCE_MS = 120;
 
 /** The whole client-side state; everything on screen is derived from it. */
 const state = {
@@ -24,7 +30,8 @@ const state = {
 	/** Remote-branch toggle; null until the user changes it, meaning "use the setting". */
 	showRemoteBranches: null as boolean | null,
 	/** Scroll position to apply once the first graph for the restored repo arrives. */
-	restoreScrollTop: null as number | null
+	restoreScrollTop: null as number | null,
+	detailsHeight: null as number | null
 };
 
 const saved = vscode.getState();
@@ -32,6 +39,7 @@ if (saved !== undefined) {
 	state.repo = saved.repo;
 	state.showRemoteBranches = saved.showRemoteBranches;
 	state.restoreScrollTop = saved.scrollTop;
+	state.detailsHeight = saved.detailsHeight ?? null;
 }
 
 function post(message: WebviewMessage): void {
@@ -42,7 +50,12 @@ let saveTimer = 0;
 function persist(): void {
 	clearTimeout(saveTimer);
 	saveTimer = window.setTimeout(() => {
-		vscode.setState({ repo: state.repo, scrollTop: table.scrollTop, showRemoteBranches: state.showRemoteBranches });
+		vscode.setState({
+			repo: state.repo,
+			scrollTop: table.scrollTop,
+			showRemoteBranches: state.showRemoteBranches,
+			detailsHeight: state.detailsHeight
+		});
 	}, 200);
 }
 
@@ -73,7 +86,7 @@ const message = el('div', 'message');
 message.hidden = true;
 
 const table = new CommitTable({
-	onSelect: () => undefined,
+	onSelect: (commit, toggle) => selectCommit(commit, toggle),
 	onContextMenu: (event, commit, label) => menu.open(event.clientX, event.clientY, menuItems(commit, label)),
 	onNearEnd: () => {
 		if (state.config?.loadMoreCommitsAutomatically === true) loadMore();
@@ -82,10 +95,29 @@ const table = new CommitTable({
 		menu.close();
 		persist();
 	}
+}, mode === 'sidebar');
+
+const details = new DetailsPane({
+	onOpenDiff: (target, change) => post({ type: 'openDiff', target, change }),
+	onFileContextMenu: (event, target, change) => menu.open(event.clientX, event.clientY, fileMenuItems(target, change)),
+	onRevealCommit: (hash) => table.reveal(hash),
+	onClose: () => details.close(),
+	onResize: (height) => {
+		state.detailsHeight = height;
+		persist();
+	}
 });
+if (state.detailsHeight !== null) details.setHeight(state.detailsHeight);
 
 const menu = new ContextMenu();
-app.append(toolbar, message, table.element, menu.element);
+document.body.classList.add(`mode-${mode}`);
+if (mode === 'sidebar') {
+	// The sidebar's title bar carries refresh; the toolbar keeps only the repo picker.
+	remoteLabel.hidden = true;
+	statusText.hidden = true;
+	refreshButton.hidden = true;
+}
+app.append(toolbar, message, table.element, details.element, menu.element);
 
 // ---- Behaviour ------------------------------------------------------------
 
@@ -116,6 +148,46 @@ function reload(): void {
 function loadMore(): void {
 	if (state.loading || state.config === null || state.data === null || !state.data.moreAvailable) return;
 	request(state.data.maxCommits + state.config.loadMoreCommits);
+}
+
+let selectTimer = 0;
+
+/**
+ * Reports a selection to the host, which loads its files into the Changes view
+ * and answers with them for the details pane. Clicking the row whose details
+ * are already open closes them instead.
+ */
+function selectCommit(commit: Commit, toggle: boolean): void {
+	if (state.repo === null) return;
+	if (mode === 'panel' && details.currentHash === commit.hash) {
+		if (toggle) details.close();
+		return;
+	}
+	const repo = state.repo;
+	if (mode === 'panel') {
+		details.open(repo, commit, labelsFor(commit));
+	}
+	clearTimeout(selectTimer);
+	selectTimer = window.setTimeout(() => {
+		const title = commit.hash === UNCOMMITTED ? commit.subject : `${shortHash(commit.hash)} ${commit.subject}`;
+		post({ type: 'selectCommit', target: changeTarget(repo, commit), title });
+	}, SELECT_DEBOUNCE_MS);
+}
+
+function labelsFor(commit: Commit): RefLabel[] {
+	return state.data !== null && state.config !== null ? (buildLabels(state.data, state.config).get(commit.hash) ?? []) : [];
+}
+
+function fileMenuItems(target: ChangeTarget, change: FileChange): MenuItem[] {
+	const items: MenuItem[] = [{ label: 'Open Changes', action: () => post({ type: 'openDiff', target, change }) }];
+	if (change.type !== FileChangeType.Deleted) {
+		items.push({ label: 'Open File', action: () => post({ type: 'openFile', repo: target.repo, path: change.path }) });
+	}
+	items.push(
+		{ separator: true },
+		{ label: 'Copy Relative Path', action: () => post({ type: 'copyToClipboard', text: change.path, label: 'path' }) }
+	);
+	return items;
 }
 
 function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
@@ -150,6 +222,7 @@ function renderRepos(): void {
 	);
 	if (state.repo !== null) repoSelect.value = state.repo;
 	repoLabel.hidden = state.repos.length <= 1;
+	toolbar.hidden = mode === 'sidebar' && repoLabel.hidden;
 }
 
 function render(): void {
@@ -198,11 +271,29 @@ function showGraph(data: GraphData): void {
 	// Unhide before measuring: a hidden element has no size and ignores scrollTop.
 	table.element.hidden = data.commits.length === 0;
 	table.setData(data, layout, config);
+	syncDetails(data);
 	if (state.restoreScrollTop !== null) {
 		table.scrollTop = state.restoreScrollTop;
 		state.restoreScrollTop = null;
 	} else if (switchedRepo) {
 		table.scrollTop = 0;
+	}
+}
+
+/**
+ * After a reload, the open details must still describe something on screen:
+ * a commit that vanished (amended, rebased away) closes the pane, and the
+ * Uncommitted Changes row, whose files change constantly, is re-read.
+ */
+function syncDetails(data: GraphData): void {
+	const hash = details.currentHash;
+	if (hash === null) return;
+	const commit = data.commits.find((c) => c.hash === hash);
+	if (commit === undefined) {
+		details.close();
+	} else if (hash === UNCOMMITTED) {
+		details.open(data.repo.path, commit, []);
+		post({ type: 'selectCommit', target: changeTarget(data.repo.path, commit), title: commit.subject });
 	}
 }
 
@@ -228,6 +319,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 				state.error = null;
 				state.loading = false;
 				table.clear();
+				details.close();
 			}
 			renderRepos();
 			persist();
@@ -243,6 +335,9 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 			state.error = null;
 			showGraph(msg.data);
 			break;
+		case 'changes':
+			if (msg.repo === state.repo) details.showChanges(msg.hash, msg.changes, msg.error);
+			return;
 		case 'error':
 			if (msg.repo !== null && msg.repo !== state.repo) return;
 			state.loading = false;
@@ -258,8 +353,13 @@ repoSelect.addEventListener('change', () => {
 	state.error = null;
 	state.restoreScrollTop = null;
 	table.clear();
+	details.close();
 	persist();
 	reload();
+});
+
+document.addEventListener('keydown', (event) => {
+	if (event.key === 'Escape' && details.isOpen) details.close();
 });
 
 remoteCheckbox.addEventListener('change', () => {

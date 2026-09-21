@@ -6,7 +6,10 @@
  * error rather than a silently ignored postMessage. Imported by both bundles;
  * it must stay free of `vscode` and Node imports.
  */
-import type { GraphData } from '../types.ts';
+import type { ChangeTarget, FileChange, GraphData, Hash } from '../types.ts';
+
+/** Where the webview is shown: the editor-area panel, or the Activity Bar sidebar. */
+export type ViewMode = 'panel' | 'sidebar';
 
 /** Settings the webview needs to render, resolved on the host from configuration. */
 export interface ViewConfig {
@@ -41,7 +44,14 @@ export type HostMessage =
 	  }
 	| { readonly type: 'loading'; readonly repo: string }
 	| { readonly type: 'graph'; readonly data: GraphData }
-	| { readonly type: 'error'; readonly repo: string | null; readonly message: string };
+	| { readonly type: 'error'; readonly repo: string | null; readonly message: string }
+	| {
+			readonly type: 'changes';
+			readonly repo: string;
+			readonly hash: Hash;
+			readonly changes: readonly FileChange[] | null;
+			readonly error: string | null;
+	  };
 
 /** What the webview asks the graph to be loaded with. */
 export interface LoadOptions {
@@ -56,11 +66,18 @@ export type WebviewMessage =
 	/** Sent once the webview script is running and can receive messages. */
 	| { readonly type: 'ready'; readonly repo: string | null }
 	| { readonly type: 'load'; readonly options: LoadOptions }
-	| { readonly type: 'copyToClipboard'; readonly text: string; readonly label: string };
+	| { readonly type: 'copyToClipboard'; readonly text: string; readonly label: string }
+	/** The user selected a row; the host loads its changed files. */
+	| { readonly type: 'selectCommit'; readonly target: ChangeTarget; readonly title: string }
+	| { readonly type: 'openDiff'; readonly target: ChangeTarget; readonly change: FileChange }
+	/** Opens the working-tree version of a repo-relative path. */
+	| { readonly type: 'openFile'; readonly repo: string; readonly path: string };
 
 /** State the webview persists with `vscode.setState`, surviving hide/show and reloads. */
 export interface PersistedViewState {
 	readonly repo: string | null;
 	readonly scrollTop: number;
 	readonly showRemoteBranches: boolean | null;
+	/** Height of the commit details pane, once the user has resized it. */
+	readonly detailsHeight?: number | null;
 }

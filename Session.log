@@ -39,6 +39,9 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | Graph layout location | Computed in the webview | `layoutGraph` is pure; the host sends commits + refs only, and the view can re-layout without a round trip. |
 | Stash rows | One synthetic row per stash, parent = base commit only | A stash is really a 2–3 parent merge with an internal "index on…" commit; drawing that is noise. Inserted by date, never below its base. |
 | Context menu | Own DOM menu in the webview | #873 / #863. No native webview menu contributions at all. |
+| Activity Bar container | Own container "Git Graph Next" with two views: a compact webview graph and a native tree "Changes" | Requested by the user in session 3. The same webview bundle runs in both places (`data-mode` on `<body>`); one `GraphController` class drives either host. |
+| Changes of a commit | Against the **first parent**; stash against its base; Uncommitted against HEAD incl. untracked | Matches what `git show` shows for a normal commit; merges say so explicitly in the details pane. |
+| Diff documents | `git-graph-next:` URIs, read-only, path = repo-relative file (tab name + language), everything else in the JSON query | Uncommitted diffs use the real `file:` URI on the right, so the diff is editable. |
 | Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewFileHistory`, `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
 | Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
 
@@ -100,14 +103,36 @@ installed.** Awaiting live verification by the user.
 - Tests: `test/graphData.integration.test.ts` (7), `test/render.test.ts` (9).
 - `.gitignore`, `.vscodeignore`, `@vscode/vsce` as a dev dependency.
 
+Session 3. **48/48 tests pass, `tsc --noEmit` clean, packaged and installed.**
+Awaiting live verification.
+
+- Activity Bar icon (`media/activity-bar.svg`) and view container with:
+  - **Graph** (`src/view/sidebar.ts`) — compact graph: graph + description
+    only; author/date/hash in the row tooltip; title-bar Refresh and
+    "Open Git Graph in Editor".
+  - **Changes** (`src/view/changesView.ts`) — files changed by the selected
+    commit, with SCM-style coloured status badges; click → diff; inline
+    "Open File"; context menu: Open Changes / Open File / Copy Relative Path.
+    Follows the selection of *either* graph view. Committed changes cached (50).
+- Commit details pane in the editor panel (`webview/details.ts`): hash,
+  clickable parents, author/committer and dates, refs, full message; file list
+  with +/− counts; click → diff; own context menu on files; resizable (height
+  persisted); Escape or clicking the row again closes it; re-read on refresh
+  for Uncommitted Changes, closed if the commit disappears.
+- `src/git/changes.ts` — name-status + numstat parsing (`-z`, renames,
+  binaries), uncommitted changes, file-at-revision reading.
+- `src/view/controller.ts` — the panel logic, extracted so the panel and the
+  sidebar share it. `src/view/diff.ts` — content provider and diff opening.
+- Tests: `test/changes.integration.test.ts` (6), including `color.ui=always`.
+
 ### Not started
 
-Commit details panel (click a commit → files changed, diff). Not in the Phase 1
-list, but it is the first thing users will expect; proposed as the next step.
+Phase 2.
 
 ---
 
 ## 4. Hard-won facts (do not re-derive these)
+
 
 Verified empirically against git 2.53. These cost debugging time once already.
 
@@ -136,6 +161,9 @@ Verified empirically against git 2.53. These cost debugging time once already.
    error from git, not a silent fallback.
 9. `origin/HEAD` is a symbolic ref naming the remote's default branch. It is not
    a branch and must not be drawn as one.
+10. **`color.ui=always` colours even piped output** of `git diff` /
+    `diff-tree`, putting escape codes inside parsed paths. Always pass
+    `--no-color` (and `--no-ext-diff`) when parsing. Covered by a test.
 
 ---
 
@@ -189,7 +217,7 @@ Structurally already supported by `LogFilter` / `layoutGraph`; they need UI.
 - [ ] #313 — richer issue linking
 - [ ] #475 — display git notes
 - [ ] #598 — rich diff for Jupyter notebooks
-- [ ] #781 — minimal graph in the side panel
+- [x] #781 — minimal graph in the side panel (session 3)
 
 ### Phase 3 — write actions
 
@@ -265,3 +293,18 @@ fetch/prune, `integratedTerminalShell`, `graph.uncommittedChanges`,
 
 **Next action:** fix whatever the live check finds; then the commit details
 panel (click a commit → changed files, open diff), before Phase 2 filters.
+
+### Session 3 — 2026-09-21
+
+**Goal:** Activity Bar icon with a sidebar where changes can be picked
+(user request), then the commit details pane.
+
+Built both (see §3). The user committed Phase 1 (with the `.gitignore` clean-up)
+before this session.
+
+**Stopped at:** sidebar + Changes view + details pane built, installed, awaiting
+the user's live check.
+
+**Next action:** fix whatever the live check finds; then Phase 2, starting
+with the filters that already have `LogFilter` support: branches (#760),
+file/folder (#70), author (#171).

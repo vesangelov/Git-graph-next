@@ -2,7 +2,11 @@ import * as vscode from 'vscode';
 import { GitExecutor } from './git/executor.ts';
 import { RepoManager } from './repoManager.ts';
 import { GraphPanel, VIEW_TYPE } from './view/panel.ts';
-import { gitPathCandidates, showStatusBarItem } from './config.ts';
+import { GraphController, type GraphServices } from './view/controller.ts';
+import { GraphSidebarProvider, SIDEBAR_VIEW_ID } from './view/sidebar.ts';
+import { ChangeItem, ChangesService } from './view/changesView.ts';
+import { REVISION_SCHEME, RevisionContentProvider, openChangeDiff, openWorkingFile } from './view/diff.ts';
+import { gitPathCandidates, retainContextWhenHidden, showStatusBarItem } from './config.ts';
 
 /**
  * Set as soon as a usable git is found. Menu `when` clauses depend on it, so
@@ -30,12 +34,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 
 	const repos = new RepoManager(git, context.workspaceState);
-	context.subscriptions.push(repos, { dispose: () => GraphPanel.disposeCurrent() });
+	const changes = new ChangesService(git);
+	const services: GraphServices = { extensionUri: context.extensionUri, git, repos, changes };
+	const sidebar = new GraphSidebarProvider(services);
+	context.subscriptions.push(repos, changes, sidebar, { dispose: () => GraphPanel.disposeCurrent() });
 
-	const open = (repo: string | null = null) => GraphPanel.show(context.extensionUri, git, repos, repo);
+	const open = (repo: string | null = null) => GraphPanel.show(services, repo);
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('gitGraphNext.view', () => open()),
+		// Same action, separate id so the sidebar title bar can show a distinct icon.
+		vscode.commands.registerCommand('gitGraphNext.openFullGraph', () => open()),
 
 		// Invoked from the Explorer context menu with the folder's URI.
 		vscode.commands.registerCommand('gitGraphNext.viewForRepo', async (uri?: vscode.Uri) => {
@@ -49,7 +58,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			open(repo);
 		}),
 
-		vscode.commands.registerCommand('gitGraphNext.refresh', () => GraphPanel.refresh()),
+		vscode.commands.registerCommand('gitGraphNext.refresh', () => GraphController.refreshAll()),
+
+		// Changes view items. Invoked with the clicked item as the argument.
+		vscode.commands.registerCommand('gitGraphNext.openChangeDiff', (item?: ChangeItem) => {
+			if (item instanceof ChangeItem) return openChangeDiff(item.target, item.change);
+		}),
+		vscode.commands.registerCommand('gitGraphNext.openChangeFile', (item?: ChangeItem) => {
+			if (item instanceof ChangeItem) return openWorkingFile(item.target.repo, item.change.path);
+		}),
+		vscode.commands.registerCommand('gitGraphNext.copyChangePath', async (item?: ChangeItem) => {
+			if (!(item instanceof ChangeItem)) return;
+			await vscode.env.clipboard.writeText(item.change.path);
+			vscode.window.setStatusBarMessage('Copied path to the clipboard', 3000);
+		}),
+
+		vscode.workspace.registerTextDocumentContentProvider(REVISION_SCHEME, new RevisionContentProvider(git)),
+		vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, { webviewOptions: { retainContextWhenHidden: retainContextWhenHidden() } }),
 
 		vscode.commands.registerCommand('gitGraphNext.addGitRepository', async () => {
 			const picked = await vscode.window.showOpenDialog({
@@ -79,7 +104,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 		vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
 			async deserializeWebviewPanel(panel: vscode.WebviewPanel) {
-				GraphPanel.revive(panel, context.extensionUri, git, repos);
+				GraphPanel.revive(panel, services);
 			}
 		})
 	);

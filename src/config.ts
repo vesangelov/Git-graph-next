@@ -75,6 +75,10 @@ export function showStatusBarItem(): boolean {
 	return read('showStatusBarItem', true);
 }
 
+export function showUntrackedFiles(): boolean {
+	return read('showUntrackedFiles', true);
+}
+
 export function openToActiveEditorRepo(): boolean {
 	return read('openToTheRepoOfTheActiveTextEditorDocument', false);
 }

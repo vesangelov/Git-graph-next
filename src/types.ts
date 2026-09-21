@@ -163,6 +163,17 @@ export interface CommitSignature {
 	readonly signer: string;
 }
 
+/**
+ * What to compare: `hash` against `base`. `hash` may be `UNCOMMITTED`, meaning
+ * the working tree; `base` is null for a root commit, which is compared with
+ * the empty tree.
+ */
+export interface ChangeTarget {
+	readonly repo: string;
+	readonly hash: Hash;
+	readonly base: Hash | null;
+}
+
 /** A filter applied to `git log`, mirroring the filter bar in the view. */
 export interface LogFilter {
 	/** Restrict history to commits touching these repo-relative paths (#70). */

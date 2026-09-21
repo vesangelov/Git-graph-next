@@ -86,7 +86,8 @@ export function buildLabels(data: GraphData, config: Pick<ViewConfig, 'combineLo
 }
 
 export interface TableCallbacks {
-	onSelect(commit: Commit): void;
+	/** `toggle` is true for a plain click, which may close details already open for the row. */
+	onSelect(commit: Commit, toggle: boolean): void;
 	onContextMenu(event: MouseEvent, commit: Commit, label: RefLabel | null): void;
 	onNearEnd(): void;
 	onScroll(scrollTop: number): void;
@@ -121,8 +122,15 @@ export class CommitTable {
 	private drawn: { first: number; last: number } | null = null;
 	private frame = 0;
 
-	constructor(private readonly callbacks: TableCallbacks) {
-		this.element = el('div', 'table');
+	/**
+	 * @param compact Sidebar mode: only the graph and description columns, with
+	 * the author, date and hash moved into the row tooltip.
+	 */
+	constructor(
+		private readonly callbacks: TableCallbacks,
+		private readonly compact = false
+	) {
+		this.element = el('div', compact ? 'table compact' : 'table');
 		this.element.tabIndex = 0;
 
 		this.header = el('div', 'row header');
@@ -162,6 +170,19 @@ export class CommitTable {
 		return this.footer;
 	}
 
+	get selectedHash(): Hash | null {
+		return this.selected;
+	}
+
+	/** Selects a commit and scrolls it into view. Returns false when it is not loaded. */
+	reveal(hash: Hash): boolean {
+		const index = this.model?.data.commits.findIndex((c) => c.hash === hash) ?? -1;
+		if (index === -1) return false;
+		this.select(hash);
+		this.scrollRowIntoView(index);
+		return true;
+	}
+
 	setData(data: GraphData, layout: GraphLayout, config: ViewConfig): void {
 		this.geometry = { ...DEFAULT_GEOMETRY, style: config.graphStyle };
 		const colours = config.colours.length > 0 ? config.colours : ['#888'];
@@ -191,10 +212,6 @@ export class CommitTable {
 		this.rowsLayer.replaceChildren();
 		this.svg.replaceChildren();
 		this.body.style.height = '0px';
-	}
-
-	focus(): void {
-		this.element.focus({ preventScroll: true });
 	}
 
 	private scheduleDraw(): void {
@@ -279,6 +296,11 @@ export class CommitTable {
 		}
 		const subject = el('span', 'subject', commit.subject);
 		subject.title = commit.body === '' ? commit.subject : `${commit.subject}\n\n${commit.body}`;
+		if (this.compact && commit.hash !== UNCOMMITTED) {
+			const when = formatDate(model.config.dateType === 'Commit Date' ? commit.committerDate : commit.authorDate, model.config.dateFormat);
+			const who = commit.stash !== null ? commit.stash.selector : commit.author;
+			subject.title = `${shortHash(commit.hash)} · ${who} · ${when}\n\n${subject.title}`;
+		}
 		desc.appendChild(subject);
 		element.appendChild(desc);
 
@@ -314,14 +336,15 @@ export class CommitTable {
 	private onRowEvent(event: MouseEvent, context: boolean): void {
 		const hit = this.rowFromEvent(event);
 		if (hit === null) return;
-		this.select(hit.commit.hash);
+		// Right-clicking the selected row must not re-select it: that would toggle its details shut.
+		if (!context || hit.commit.hash !== this.selected) this.select(hit.commit.hash, !context);
 		if (context) {
 			event.preventDefault();
 			this.callbacks.onContextMenu(event, hit.commit, hit.label);
 		}
 	}
 
-	private select(hash: Hash): void {
+	private select(hash: Hash, toggle = false): void {
 		if (this.model === null) return;
 		this.selected = hash;
 		for (const row of this.rowsLayer.children) {
@@ -329,7 +352,7 @@ export class CommitTable {
 			row.classList.toggle('selected', this.model.data.commits[index]?.hash === hash);
 		}
 		const commit = this.model.data.commits.find((c) => c.hash === hash);
-		if (commit !== undefined) this.callbacks.onSelect(commit);
+		if (commit !== undefined) this.callbacks.onSelect(commit, toggle);
 	}
 
 	private onKey(event: KeyboardEvent): void {
@@ -340,8 +363,11 @@ export class CommitTable {
 		if (commits[next] === undefined) return;
 		event.preventDefault();
 		this.select(commits[next].hash);
+		this.scrollRowIntoView(next);
+	}
 
-		// Keep the selection in view, below the sticky header.
+	/** Scrolls the least distance that shows a row fully, below the sticky header. */
+	private scrollRowIntoView(next: number): void {
 		const h = this.geometry.rowHeight;
 		const rowTop = this.body.offsetTop + next * h;
 		const viewTop = this.element.scrollTop + this.header.offsetHeight;

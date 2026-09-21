@@ -65,12 +65,51 @@
         "command": "gitGraphNext.removeGitRepository",
         "title": "Remove Git Repository...",
         "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.openChangeDiff",
+        "title": "Open Changes",
+        "category": "Git Graph Next",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "gitGraphNext.openChangeFile",
+        "title": "Open File",
+        "category": "Git Graph Next",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "gitGraphNext.copyChangePath",
+        "title": "Copy Relative Path",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.openFullGraph",
+        "title": "Open Git Graph in Editor",
+        "category": "Git Graph Next",
+        "icon": "$(link-external)"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "gitGraphNext.viewForRepo",
+          "when": "false"
+        },
+        {
+          "command": "gitGraphNext.openChangeDiff",
+          "when": "false"
+        },
+        {
+          "command": "gitGraphNext.openChangeFile",
+          "when": "false"
+        },
+        {
+          "command": "gitGraphNext.copyChangePath",
+          "when": "false"
+        },
+        {
+          "command": "gitGraphNext.openFullGraph",
           "when": "false"
         }
       ],
@@ -86,6 +125,40 @@
           "command": "gitGraphNext.viewForRepo",
           "group": "gitGraphNext@1",
           "when": "gitGraphNext.enabled && explorerResourceIsFolder"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "gitGraphNext.refresh",
+          "when": "view == gitGraphNext.graphView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gitGraphNext.openFullGraph",
+          "when": "view == gitGraphNext.graphView",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gitGraphNext.openChangeFile",
+          "when": "view == gitGraphNext.changesView && viewItem == change",
+          "group": "inline"
+        },
+        {
+          "command": "gitGraphNext.openChangeDiff",
+          "when": "view == gitGraphNext.changesView",
+          "group": "1_open@1"
+        },
+        {
+          "command": "gitGraphNext.openChangeFile",
+          "when": "view == gitGraphNext.changesView && viewItem == change",
+          "group": "1_open@2"
+        },
+        {
+          "command": "gitGraphNext.copyChangePath",
+          "when": "view == gitGraphNext.changesView",
+          "group": "2_copy@1"
         }
       ]
     },
@@ -330,6 +403,32 @@
           "scope": "machine"
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitGraphNext",
+          "title": "Git Graph Next",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitGraphNext": [
+        {
+          "type": "webview",
+          "id": "gitGraphNext.graphView",
+          "name": "Graph",
+          "icon": "media/activity-bar.svg",
+          "contextualTitle": "Git Graph Next"
+        },
+        {
+          "id": "gitGraphNext.changesView",
+          "name": "Changes",
+          "icon": "media/activity-bar.svg",
+          "contextualTitle": "Git Graph Next"
+        }
+      ]
     }
   },
   "scripts": {
