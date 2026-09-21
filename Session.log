@@ -1,0 +1,209 @@
+# Session log — Git Graph Next
+
+A running record of decisions, progress and open work. Updated at the end of
+each working session. Newest session entry at the bottom.
+
+---
+
+## 1. Non-negotiable constraints
+
+**This project is not a fork.** `mhutchie/vscode-git-graph` is distributed under
+a licence that grants use, copy and modify, but explicitly withholds permission
+to *publish or distribute derivative works*. Publishing a fork would be a licence
+violation. See `NOTICE.md`.
+
+Therefore:
+
+- No code, markup, CSS or asset from that repository may enter this one.
+- Do not read that project's source while implementing a feature here.
+- Its **issue tracker** is fair game: those are user-written descriptions of
+  bugs and desired behaviour, not covered by the code licence.
+- How git itself behaves, and the documented VS Code API, are facts — not
+  anyone's intellectual property.
+
+Issue numbers referenced below (`#70`, `#207`, …) are issues in
+`mhutchie/vscode-git-graph`, kept as a demand signal.
+
+---
+
+## 2. Decisions taken
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Name | Git Graph Next | Chosen by the user over `Commit Graph` / `Gitline`. Carries a naming-proximity risk to the original, accepted knowingly. |
+| Scope of v0.1 | Full parity with Git Graph + the fixes | Chosen by the user over a smaller first release. Months of work before publishing; the roadmap below is sequenced so parity is reached in usable stages. |
+| Licence | MIT | Deliberately the opposite of the original's restriction. Forks of *this* project must stay legal. |
+| Language / build | TypeScript, esbuild | One bundler for extension and webview. No framework in the webview: the commit table must stay fast with 100k+ rows. |
+| Git access | Spawn the `git` binary | Full feature coverage. Wrapped behind `GitExecutor` so a future web build (#687) has a seam to swap. |
+| Tests | `node:test`, esbuild-compiled | This Node build lacks type stripping (`ERR_NO_TYPESCRIPT`), so tests are bundled to `out/test/` first. |
+
+### Deferred / not yet decided
+
+- Marketplace publisher identity (`publisher` in `package.json` is a placeholder).
+- Extension icon (`media/icon.png` does not exist yet — packaging will fail until it does).
+- Whether to support `vscode.dev` (#687). The `GitExecutor` seam exists; nothing depends on the answer yet.
+
+---
+
+## 3. Status
+
+### Done and verified
+
+Foundation layer. **26/26 tests pass, `tsc --noEmit` clean.**
+
+- `src/types.ts` — types shared across the postMessage boundary. All JSON-safe.
+  No `const enum` anywhere: it is not erasable syntax and breaks both Node type
+  stripping and cross-file bundling.
+- `src/git/executor.ts` — spawns git, streams stdout. No `vscode` import, so
+  the whole git layer is testable in plain Node.
+- `src/git/log.ts` — builds `git log` arguments and parses the output.
+- `src/git/refs.ts` — branches, remotes, tags, stashes, HEAD state, and
+  detection of an interrupted merge/rebase/cherry-pick/revert/bisect.
+- `src/graph/layout.ts` — lane-allocation sweep producing columns, colours and
+  edges.
+- `test/layout.test.ts` (13 tests) — pure layout logic.
+- `test/git.integration.test.ts` (13 tests) — runs real git against generated
+  repositories containing Cyrillic, emoji, quotes, `$(...)`, pipes, multi-line
+  bodies, merges, annotated and lightweight tags, detached HEAD, stashes, and a
+  genuine merge conflict.
+
+### Not started
+
+Everything in the UI layer. Nothing renders yet; the extension does not activate.
+
+---
+
+## 4. Hard-won facts (do not re-derive these)
+
+Verified empirically against git 2.53. These cost debugging time once already.
+
+1. **NUL is spelled differently per command.** `for-each-ref` uses `%00`;
+   `git log` and `git stash list` take a *log format*, where the same byte is
+   `%x00` and `%00` emits three literal characters. The formats look
+   interchangeable and are not.
+2. **`for-each-ref` needs a trailing separator.** Without a final `%00`, the
+   last field of each record runs into the first field of the next (git writes
+   only a newline between records), and every record after the first parses one
+   field out of step. The symptom is missing branches, not an error.
+3. **NUL is the only safe delimiter** for commit data: git forbids it in commit
+   messages, author names and paths, so repository content cannot forge it.
+   Verified against deliberately hostile messages.
+4. **`git log -z` terminates records with NUL**, leaving a trailing empty field
+   after splitting, and prefixes records after the first with a newline — strip
+   a leading `\n` from the hash field.
+5. **Annotated tags must be dereferenced.** `%(objectname)` on an annotated tag
+   is the tag object, not a commit. Use `%(*objectname)` when
+   `%(objecttype) == 'tag'`, or labels attach to nothing in the graph.
+6. **`%(ahead-behind:HEAD)` requires git 2.41+.** `%(upstream:track)` works
+   everywhere and is parsed instead; `[gone]` means the upstream was deleted.
+7. **`--exclude` only affects ref globs that follow it**, so it must be emitted
+   before `--branches` / `--remotes` / `--tags`, not after.
+8. **`--follow` accepts exactly one path.** Requesting it with several is an
+   error from git, not a silent fallback.
+9. `origin/HEAD` is a symbolic ref naming the remote's default branch. It is not
+   a branch and must not be drawn as one.
+
+---
+
+## 5. Roadmap
+
+Ordered by what unblocks the most. Issue numbers are the demand signal.
+
+### Phase 1 — make it render (next up)
+
+The goal is a graph on screen against a real repository.
+
+- [ ] `src/git/repository.ts` — discover repositories: the `vscode.git`
+      extension API first, workspace folder scan as fallback, honouring
+      `maxDepthOfRepoSearch`.
+- [ ] `src/view/protocol.ts` — typed request/response messages.
+- [ ] `src/view/panel.ts` — the webview panel: strict CSP with a nonce,
+      `retainContextWhenHidden`, state restore across reloads.
+- [ ] `webview/render/graph.ts` — SVG renderer consuming `GraphLayout`.
+- [ ] `webview/render/table.ts` — virtualised commit table; only visible rows in
+      the DOM. **Sticky header (#132).**
+- [ ] `webview/style.css` — themed entirely from VS Code CSS variables so light,
+      dark and high-contrast all work without a per-theme branch.
+- [ ] `src/extension.ts` — activation, command registration, status bar item.
+
+**Fix while building, do not retrofit** — these are why users are leaving today:
+
+- [ ] #903 — SCM title icon disappears. `when` clauses must not depend on
+      context keys that are never set; set `gitGraphNext.enabled` explicitly on
+      activation.
+- [ ] #794 — `Cannot read properties of null (reading 'rootUri')`. Never assume
+      the git extension has a repository for the active editor.
+- [ ] #873 — right-click broken after VS Code 1.97. Own context menu inside the
+      webview; do not rely on native menu behaviour.
+- [ ] #863 — context menu absent in VSCodium. No dependency on
+      Marketplace-only or proprietary-build APIs.
+
+### Phase 2 — read-only power features
+
+Structurally already supported by `LogFilter` / `layoutGraph`; they need UI.
+
+- [ ] #70 — filter the graph by file or folder → `LogFilter.paths`
+- [ ] #171 — filter by author → `LogFilter.authors`
+- [ ] #760 — filter displayed branches → `LogFilter.branches`
+- [ ] #360 — exclude branches by glob → `LogFilter.excludeGlobs`
+- [ ] #591 — arbitrary extra `git log` arguments → `LogFilter.extraArgs`
+- [ ] #207 — persistent branches get a dedicated column → `pinnedBranches`
+- [ ] #254 — branch colour on all commits → first-parent colour inheritance
+- [ ] #465 — filter by tag
+- [ ] #147 — advanced search
+- [ ] #387 — collapsible graph sections
+- [ ] #313 — richer issue linking
+- [ ] #475 — display git notes
+- [ ] #598 — rich diff for Jupyter notebooks
+- [ ] #781 — minimal graph in the side panel
+
+### Phase 3 — write actions
+
+`GitRefReader.readState()` already detects interrupted operations, which is what
+makes the continue/abort affordances possible.
+
+- [ ] Checkout, branch create/delete/rename, merge, rebase, cherry-pick, revert,
+      reset, stash apply/pop/drop, tag create/delete, push, pull, fetch.
+- [ ] #182 — multi-commit operations (select a range, act on it)
+- [ ] #410 — create fixup / squash, and autosquash, from the commit context menu
+- [ ] #113 — complete rebase support
+- [ ] #757 — interactive rebase driven from the VS Code editor
+- [ ] #587 — autosquash option in the rebase dialog
+- [ ] #519 — `merge --abort`
+- [ ] #184 — delete several branches at once
+- [ ] #538 — create and apply patches
+
+### Phase 4 — release
+
+- [ ] Extension icon, README with screenshots, CHANGELOG.
+- [ ] Publisher account; `vsce package` in CI.
+- [ ] Performance pass against a repository with 100k+ commits.
+- [ ] #675 — restore the graph tab after a VS Code restart.
+
+---
+
+## 6. Session history
+
+### Session 1 — 2026-09-21
+
+**Goal:** establish whether the gap is real, decide the approach, build a
+foundation that cannot rot.
+
+Researched the opportunity before writing code: most-reacted open feature
+requests in `microsoft/vscode`, Marketplace statistics for the top 500
+extensions, and the state of the original repository. Git Graph: 15.3M installs,
+4.94 rating, last release April 2021, no push since July 2023, 332 open issues,
+best-maintained alternative at 41k installs. Demand confirmed; the gap is
+genuine.
+
+Discovered the licence restriction, which reframed the whole project — it
+explains why 464 forks produced no successor, and it forces a clean-room build.
+
+Built and verified the foundation listed in §3. Three real bugs were caught by
+the tests rather than by users: the two NUL-format discrepancies and the
+`for-each-ref` record-boundary bug, all now recorded in §4.
+
+**Stopped at:** foundation complete, nothing renders yet.
+
+**Next action:** Phase 1, starting with `src/git/repository.ts` (repository
+discovery), since panel and webview both depend on having a repository to show.

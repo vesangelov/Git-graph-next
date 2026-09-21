@@ -1,0 +1,406 @@
+{
+  "name": "git-graph-next",
+  "displayName": "Git Graph Next",
+  "description": "View a fast, interactive Git graph of your repository, and perform Git actions from the graph.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "git-graph-next",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "graph",
+    "log",
+    "history",
+    "branch"
+  ],
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Git Graph Next executes the git binary against the workspace, which is unsafe in untrusted workspaces."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitGraphNext.view",
+        "title": "View Git Graph",
+        "category": "Git Graph Next",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "gitGraphNext.viewForRepo",
+        "title": "View Git Graph for Repository",
+        "category": "Git Graph Next",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "gitGraphNext.viewFileHistory",
+        "title": "View Git Graph (File History)",
+        "category": "Git Graph Next",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "gitGraphNext.viewLineHistory",
+        "title": "View Git Graph (Line History)",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.refresh",
+        "title": "Refresh Git Graph",
+        "category": "Git Graph Next",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitGraphNext.addGitRepository",
+        "title": "Add Git Repository...",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.removeGitRepository",
+        "title": "Remove Git Repository...",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.clearAvatarCache",
+        "title": "Clear Avatar Cache",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.resumeWorkspaceCodeReview",
+        "title": "Resume a specific Code Review in Workspace...",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.endAllWorkspaceCodeReviews",
+        "title": "End All Code Reviews in Workspace",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.openDiffOfCommit",
+        "title": "Open Diff of Commit",
+        "category": "Git Graph Next"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "gitGraphNext.viewForRepo",
+          "when": "false"
+        },
+        {
+          "command": "gitGraphNext.openDiffOfCommit",
+          "when": "false"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "gitGraphNext.view",
+          "group": "navigation",
+          "when": "config.git-graph-next.showScmTitleIcon && gitGraphNext.enabled"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "gitGraphNext.viewFileHistory",
+          "group": "navigation@100",
+          "when": "config.git-graph-next.showEditorTitleIcon && gitGraphNext.enabled && gitGraphNext.editorInRepo"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "gitGraphNext.viewLineHistory",
+          "group": "gitGraphNext@1",
+          "when": "gitGraphNext.enabled && gitGraphNext.editorInRepo"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "gitGraphNext.viewFileHistory",
+          "group": "gitGraphNext@1",
+          "when": "gitGraphNext.enabled && !explorerResourceIsFolder"
+        },
+        {
+          "command": "gitGraphNext.viewForRepo",
+          "group": "gitGraphNext@1",
+          "when": "gitGraphNext.enabled && explorerResourceIsFolder"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Git Graph Next",
+      "properties": {
+        "git-graph-next.showScmTitleIcon": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a Git Graph icon in the title bar of the Source Control view.",
+          "scope": "window"
+        },
+        "git-graph-next.showEditorTitleIcon": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a Git Graph icon in the editor title bar, to open the file's history.",
+          "scope": "window"
+        },
+        "git-graph-next.showStatusBarItem": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a 'Git Graph' item in the Status Bar.",
+          "scope": "window"
+        },
+        "git-graph-next.git.path": {
+          "type": [
+            "string",
+            "array",
+            "null"
+          ],
+          "default": null,
+          "description": "Path(s) to the git executable. When null, the path configured in 'git.path' is used, falling back to 'git' on PATH.",
+          "scope": "machine"
+        },
+        "git-graph-next.maxCommits": {
+          "type": "number",
+          "default": 300,
+          "minimum": 1,
+          "description": "The number of commits to initially load.",
+          "scope": "window"
+        },
+        "git-graph-next.loadMoreCommits": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "description": "The number of additional commits to load when 'Load More Commits' is used.",
+          "scope": "window"
+        },
+        "git-graph-next.loadMoreCommitsAutomatically": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically load more commits when scrolling to the bottom of the graph.",
+          "scope": "window"
+        },
+        "git-graph-next.graph.style": {
+          "type": "string",
+          "enum": [
+            "rounded",
+            "angular"
+          ],
+          "default": "rounded",
+          "description": "The style of the graph edges.",
+          "scope": "window"
+        },
+        "git-graph-next.graph.colours": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "#0085d9",
+            "#d9008f",
+            "#00d90a",
+            "#d98500",
+            "#a300d9",
+            "#ff0000",
+            "#00d9cc",
+            "#e138e8",
+            "#85d900",
+            "#dc5b23",
+            "#6f24d6",
+            "#ffcc00"
+          ],
+          "description": "The colours used on the graph.",
+          "scope": "window"
+        },
+        "git-graph-next.graph.uncommittedChanges": {
+          "type": "string",
+          "enum": [
+            "Open Circle at the Uncommitted Changes",
+            "Open Circle at the Checked Out Commit"
+          ],
+          "default": "Open Circle at the Uncommitted Changes",
+          "description": "How the Uncommitted Changes row is connected to the graph.",
+          "scope": "window"
+        },
+        "git-graph-next.graph.stickyHeader": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep the column header row visible while scrolling the graph.",
+          "scope": "window"
+        },
+        "git-graph-next.date.type": {
+          "type": "string",
+          "enum": [
+            "Author Date",
+            "Commit Date"
+          ],
+          "default": "Author Date",
+          "description": "The date type displayed and used for ordering.",
+          "scope": "window"
+        },
+        "git-graph-next.date.format": {
+          "type": "string",
+          "enum": [
+            "Date & Time",
+            "Date Only",
+            "ISO Date & Time",
+            "ISO Date Only",
+            "Relative"
+          ],
+          "default": "Date & Time",
+          "description": "The format of dates shown in the graph.",
+          "scope": "window"
+        },
+        "git-graph-next.commitOrdering": {
+          "type": "string",
+          "enum": [
+            "date",
+            "author-date",
+            "topological"
+          ],
+          "default": "date",
+          "description": "The ordering of commits (passed to git log).",
+          "scope": "window"
+        },
+        "git-graph-next.showRemoteBranches": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show remote branches by default.",
+          "scope": "window"
+        },
+        "git-graph-next.includeCommitsMentionedByReflogs": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include commits only mentioned by reflogs when showing all branches.",
+          "scope": "window"
+        },
+        "git-graph-next.onlyFollowFirstParent": {
+          "type": "boolean",
+          "default": false,
+          "description": "Only follow the first parent of commits.",
+          "scope": "window"
+        },
+        "git-graph-next.showTags": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show tags in the graph by default.",
+          "scope": "window"
+        },
+        "git-graph-next.showUncommittedChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Uncommitted Changes row.",
+          "scope": "window"
+        },
+        "git-graph-next.showUntrackedFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include untracked files in the Uncommitted Changes row.",
+          "scope": "window"
+        },
+        "git-graph-next.referenceLabels.alignment": {
+          "type": "string",
+          "enum": [
+            "Normal",
+            "Branches (on the left) & Tags (on the right)",
+            "Branches (aligned to the graph) & Tags (on the right)"
+          ],
+          "default": "Normal",
+          "description": "The alignment of branch and tag labels.",
+          "scope": "window"
+        },
+        "git-graph-next.referenceLabels.combineLocalAndRemoteBranchLabels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Combine local and remote branch labels when they refer to the same branch.",
+          "scope": "window"
+        },
+        "git-graph-next.repository.showRemoteHeads": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show remote HEAD symbolic references.",
+          "scope": "window"
+        },
+        "git-graph-next.repository.fetchAndPrune": {
+          "type": "boolean",
+          "default": false,
+          "description": "Prune remote-tracking references when fetching.",
+          "scope": "window"
+        },
+        "git-graph-next.repository.fetchAndPruneTags": {
+          "type": "boolean",
+          "default": false,
+          "description": "Prune local tags that no longer exist on the remote when fetching.",
+          "scope": "window"
+        },
+        "git-graph-next.repository.sign.commits": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable commit signing (-S) for commits created from the graph.",
+          "scope": "window"
+        },
+        "git-graph-next.repository.sign.tags": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable tag signing (-s) for annotated tags created from the graph.",
+          "scope": "window"
+        },
+        "git-graph-next.maxDepthOfRepoSearch": {
+          "type": "number",
+          "default": 0,
+          "description": "The maximum depth of subfolders to search for repositories in the workspace.",
+          "scope": "window"
+        },
+        "git-graph-next.openToTheRepoOfTheActiveTextEditorDocument": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the Git Graph View to the repository containing the active editor's document.",
+          "scope": "window"
+        },
+        "git-graph-next.retainContextWhenHidden": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep the Git Graph View running in the background when it is not visible. Uses more memory, but restores instantly.",
+          "scope": "window"
+        },
+        "git-graph-next.integratedTerminalShell": {
+          "type": "string",
+          "default": "",
+          "description": "Shell executable used when the graph opens an Integrated Terminal (e.g. for interactive rebase).",
+          "scope": "machine"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "node esbuild.mjs --production",
+    "typecheck": "tsc --noEmit",
+    "test": "node esbuild.mjs --tests && node --test \"out/test/*.test.js\"",
+    "vsce:package": "npm run package && npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/git-graph-next/git-graph-next.git"
+  }
+}
