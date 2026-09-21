@@ -18,7 +18,7 @@ import type { FilterState, HostMessage, LoadOptions, ViewMode, WebviewMessage } 
  * that got deleted, so it is followed too.
  */
 function followsRenames(options: LoadOptions): boolean {
-	if (options.filter.paths.length !== 1) return false;
+	if (options.filter.paths?.length !== 1) return false;
 	try {
 		return !statSync(join(options.repo, options.filter.paths[0])).isDirectory();
 	} catch {

@@ -861,3 +861,42 @@ body.mode-sidebar {
 	padding: 4px 8px;
 	flex-wrap: wrap;
 }
+
+/* ---- Exclusions (#360) and extra log arguments (#591) ----------------- */
+
+.branch-option.excluded span {
+	opacity: 0.55;
+	text-decoration: line-through;
+}
+
+.branch-hide {
+	border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-panel-border));
+	padding: 6px;
+}
+
+.branch-hide .chip-field {
+	min-width: 0;
+}
+
+.branch-hide .chip-field input {
+	min-width: 0;
+	width: 100%;
+}
+
+.args-field {
+	flex-basis: 100%;
+}
+
+.args-field.invalid input {
+	border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+}
+
+.args-error {
+	flex-basis: 100%;
+	color: var(--vscode-errorForeground);
+	font-size: 0.92em;
+}
+
+.args-error:empty {
+	display: none;
+}

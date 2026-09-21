@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
-import type { LoadOptions, ViewConfig } from './view/protocol.ts';
+import { completeFilter, type LoadOptions, type ViewConfig } from './view/protocol.ts';
 import type { GraphDataRequest } from './git/graphData.ts';
 import { emptyFilter } from './types.ts';
+import { validateArgs } from './git/extraArgs.ts';
 
 export const SECTION = 'git-graph-next';
 
@@ -55,7 +56,8 @@ export function viewConfig(): ViewConfig {
 		loadMoreCommits: Math.max(1, Math.floor(read('loadMoreCommits', 100))),
 		loadMoreCommitsAutomatically: read('loadMoreCommitsAutomatically', true),
 		showRemoteBranches: read('showRemoteBranches', true),
-		showTags: read('showTags', true)
+		showTags: read('showTags', true),
+		pinnedBranches: stringList('graph.pinnedBranches')
 	};
 }
 
@@ -83,17 +85,33 @@ export function openToActiveEditorRepo(): boolean {
 	return read('openToTheRepoOfTheActiveTextEditorDocument', false);
 }
 
-/** Builds the loader request for the options the webview asked for. */
+/** A setting holding a list of strings; anything else in it is ignored. */
+function stringList(key: string): string[] {
+	const value = section().get<unknown>(key);
+	return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : [];
+}
+
+/**
+ * Builds the loader request for the options the webview asked for. Throws
+ * when an extra `git log` argument is not allowed, naming it and why.
+ */
 export function graphDataRequest(options: LoadOptions, followRenames: boolean): GraphDataRequest {
 	const ordering = oneOf('commitOrdering', ['date', 'author-date', 'topological'], 'date');
+	// Complete the filter: a panel restored from an older version may send fewer fields.
+	const filter = completeFilter(options.filter);
+	const extraArgs = [...stringList('extraLogArguments'), ...filter.logArgs];
+	const invalid = validateArgs(extraArgs);
+	if (invalid !== null) throw new Error(invalid);
 	return {
 		filter: {
 			...emptyFilter(),
 			showRemoteBranches: options.showRemoteBranches,
 			showTags: options.showTags,
-			branches: options.filter.branches,
-			authors: options.filter.authors,
-			paths: options.filter.paths
+			branches: filter.branches,
+			authors: filter.authors,
+			paths: filter.paths,
+			excludeGlobs: [...stringList('excludeBranches'), ...filter.excludes],
+			extraArgs
 		},
 		followRenames,
 		maxCommits: Math.max(1, Math.floor(options.maxCommits)),

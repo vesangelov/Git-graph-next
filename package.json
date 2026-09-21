@@ -277,6 +277,15 @@
           "description": "The colours used on the graph.",
           "scope": "window"
         },
+        "git-graph-next.graph.pinnedBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Branches drawn as a straight line in a column of their own, leftmost first (e.g. `[\"main\", \"develop\"]`). Names may use `*` as a wildcard (`release/*`); remote branches are named with their remote (`origin/main`). Branches can also be pinned per repository from a branch label's context menu.",
+          "scope": "resource"
+        },
         "git-graph-next.graph.uncommittedChanges": {
           "type": "string",
           "enum": [
@@ -350,6 +359,24 @@
           "default": true,
           "description": "Show tags in the graph by default.",
           "scope": "window"
+        },
+        "git-graph-next.excludeBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Glob patterns of branches and tags to hide from the graph, passed to `git log --exclude`. A pattern matches the name without its `refs/…/` prefix: `feature/*` hides local feature branches, `origin/dependabot/*` hides remote ones, `nightly-*` hides tags. `*` also matches `/`. The checked-out branch is always shown. More patterns can be added per repository in the Branches dropdown.",
+          "scope": "resource"
+        },
+        "git-graph-next.extraLogArguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra arguments for `git log`, one per item, e.g. `[\"--no-merges\"]` or `[\"--since=1 year ago\"]`. Arguments that would break the graph (output format, diff output, `--reverse`, commit counts, `--output`, …) are rejected with an explanation. More can be added per repository in the Filter bar.",
+          "scope": "resource"
         },
         "git-graph-next.showUncommittedChanges": {
           "type": "boolean",

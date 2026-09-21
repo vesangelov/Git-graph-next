@@ -26,6 +26,8 @@ export interface ViewConfig {
 	readonly loadMoreCommitsAutomatically: boolean;
 	readonly showRemoteBranches: boolean;
 	readonly showTags: boolean;
+	/** Branch name patterns drawn in a column of their own, in priority order (#207). */
+	readonly pinnedBranches: readonly string[];
 }
 
 export interface RepoOption {
@@ -70,12 +72,24 @@ export interface FilterState {
 	readonly authors: readonly string[];
 	/** Repo-relative files or folders, forward slashes (#70). */
 	readonly paths: readonly string[];
+	/** `--exclude` glob patterns hiding branches and tags, on top of the setting (#360). */
+	readonly excludes: readonly string[];
+	/** Extra `git log` arguments, on top of the setting (#591). */
+	readonly logArgs: readonly string[];
 }
 
-export const NO_FILTER: FilterState = { branches: [], authors: [], paths: [] };
+export const NO_FILTER: FilterState = { branches: [], authors: [], paths: [], excludes: [], logArgs: [] };
+
+/** Fills fields missing from a filter saved by an older version. */
+export function completeFilter(filter: Partial<FilterState> | undefined): FilterState {
+	return { ...NO_FILTER, ...filter };
+}
 
 export function isFiltered(filter: FilterState): boolean {
-	return filter.branches.length > 0 || filter.authors.length > 0 || filter.paths.length > 0;
+	return (
+		filter.branches.length > 0 || filter.authors.length > 0 || filter.paths.length > 0 ||
+		filter.excludes.length > 0 || filter.logArgs.length > 0
+	);
 }
 
 /** What the webview asks the graph to be loaded with. */
@@ -113,5 +127,7 @@ export interface PersistedViewState {
 	/** Height of the commit details pane, once the user has resized it. */
 	readonly detailsHeight?: number | null;
 	/** Filters per repository path. */
-	readonly filters?: Readonly<Record<string, FilterState>>;
+	readonly filters?: Readonly<Record<string, Partial<FilterState>>>;
+	/** Branches pinned from the context menu, per repository path (#207). */
+	readonly pins?: Readonly<Record<string, readonly string[]>>;
 }

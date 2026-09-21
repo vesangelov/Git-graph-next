@@ -40,12 +40,16 @@ export function buildLabels(data: GraphData, config: Pick<ViewConfig, 'combineLo
 	// `origin` → `origin/main`, inverted so a label can say it is its remote's HEAD.
 	const remoteDefault = new Set(Object.values(data.remoteHeadSymrefs));
 	const folded = new Set<string>();
+	// Refs hidden by exclude patterns (#360) lose their labels too. The
+	// checked-out branch keeps its label: git still shows its commits.
+	const excluded = new Set(data.excludedRefs);
 
 	for (const head of data.heads) {
+		if (excluded.has(`refs/heads/${head.name}`) && data.repo.head !== head.name) continue;
 		const remotes: string[] = [];
 		if (config.combineLocalAndRemoteBranchLabels) {
 			for (const remote of data.remoteHeads) {
-				if (remote.hash === head.hash && remote.name === `${remote.remote}/${head.name}`) {
+				if (remote.hash === head.hash && remote.name === `${remote.remote}/${head.name}` && !excluded.has(`refs/remotes/${remote.name}`)) {
 					remotes.push(remote.remote);
 					folded.add(remote.name);
 				}
@@ -64,13 +68,14 @@ export function buildLabels(data: GraphData, config: Pick<ViewConfig, 'combineLo
 	}
 
 	for (const remote of data.remoteHeads) {
-		if (folded.has(remote.name)) continue;
+		if (folded.has(remote.name) || excluded.has(`refs/remotes/${remote.name}`)) continue;
 		const isDefault = config.showRemoteHeads && remoteDefault.has(remote.name);
 		const title = `Remote branch ${remote.name}${isDefault ? `\nDefault branch of ${remote.remote} (${remote.remote}/HEAD)` : ''}`;
 		add(remote.hash, { kind: 'remote', name: remote.name, remotes: [], current: false, title });
 	}
 
 	for (const tag of data.tags) {
+		if (excluded.has(`refs/tags/${tag.name}`)) continue;
 		add(tag.hash, { kind: 'tag', name: tag.name, remotes: [], current: false, title: `${tag.annotated ? 'Annotated tag' : 'Tag'} ${tag.name}` });
 	}
 

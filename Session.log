@@ -46,6 +46,9 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | Author filter semantics | Literal, case-insensitive (`--fixed-strings --regexp-ignore-case`); several authors = OR | Users pick names from suggestions or the context menu; "John (Work)" must not be a regex. Note `--fixed-strings` also applies to `--grep` when both are used. |
 | Search language | GitHub-style operators (`author:`, `committer:`, `message:`, `hash:`, `branch:`, `tag:`, `ref:`, `after:`, `before:`, `date:>…`), quoted phrases, all terms AND, literal and case-insensitive | Asked for in #147 itself. One shared matcher (`src/search/query.ts`) for loaded commits and history, so both agree on what a match is. |
 | History search | git narrows to a *superset* of matches (necessary conditions only), then the shared matcher decides; position from the graph's own hash list (capped at 200k) | Exact semantics without reimplementing them as git arguments. The only risk is under-matching, so narrowing never uses anything that is not strictly necessary. Known gap: free-text words split across different fields (one in the message, one in a ref name) are not found in *unloaded* history. |
+| Exclusions (#360) | Setting `excludeBranches` + per-repo patterns in the Branches dropdown + "Hide This Branch/Tag"; hidden refs' labels come from asking git (`rev-parse` with the same globs) | Label hiding follows git's own matching rules exactly instead of a re-implementation. |
+| Extra log args (#591) | Setting `extraLogArguments` + per-repo text field in the Filter bar, shell-style quoting, no expansion; a deny-list with reasons (format/diff/count/`--reverse`/`-g`/`--output`/external programs/colour/`--`), enforced on the host | Everything else is allowed. Any extra args turn on parent rewriting (e.g. `--no-merges` drops commits git does not reconnect). |
+| Pinned branches (#207) | Setting `graph.pinnedBranches` (globs, priority order) + per-repo "Pin to Own Column" from a label; default none | Pinned lanes take the leftmost columns and the first colours, so they are also stably coloured. Only branches whose tip is loaded are pinned. |
 | Filter scope | Per repository, persisted in the panel's webview state; the sidebar never filters | Keeps the sidebar a quick overview. |
 | Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
 | Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
@@ -160,10 +163,21 @@ packaged and installed.** Awaiting live verification.
 - `toLogRequest` extracted from `loadGraphData`; `buildHashListArgs` in log.ts.
 - Tests: `test/search.test.ts` (13: parser, matcher, history search).
 
+Session 6 — exclusions, extra args, pinned branches. **84/84 tests pass,
+`tsc --noEmit` clean, packaged and installed.** Awaiting live verification.
+
+- `src/git/extraArgs.ts` (pure): `splitArgs`/`joinArgs`/`validateArgs`.
+- `refGlobArgs` in log.ts (the exclude fix); `excludedRefs` in `GraphData`.
+- `webview/pins.ts`: `globMatches`, `escapeGlob`, `resolvePins`.
+- Branches dropdown: excluded branches struck through; "Hide" pattern field.
+  Filter bar: "git log" arguments field with inline validation.
+  Label context menu: Pin to Own Column / Unpin, Hide This Branch / Tag.
+- Tests: `test/options.test.ts` (8) + 2 integration tests.
+
 ### Not started
 
-Rest of Phase 2: exclude globs (#360), extra `git log` args (#591), pinned
-branch columns (#207), tag filter (#465), etc.
+Rest of Phase 2: tag filter (#465), collapsible sections (#387), richer issue
+linking (#313), git notes (#475), notebook diffs (#598).
 
 ---
 
@@ -191,8 +205,12 @@ Verified empirically against git 2.53. These cost debugging time once already.
    `%(objecttype) == 'tag'`, or labels attach to nothing in the graph.
 6. **`%(ahead-behind:HEAD)` requires git 2.41+.** `%(upstream:track)` works
    everywhere and is parsed instead; `[gone]` means the upstream was deleted.
-7. **`--exclude` only affects ref globs that follow it**, so it must be emitted
-   before `--branches` / `--remotes` / `--tags`, not after.
+7. **`--exclude` only affects the *next* ref glob option, then is cleared.**
+   It must be repeated before each of `--branches`, `--remotes` and `--tags`
+   (`refGlobArgs`); emitted once, it silently excludes local branches only.
+   Patterns match the name inside the namespace (`feature/*`, not
+   `heads/feature/*`), `*` crosses `/`, and HEAD stays visible regardless.
+   (Corrected in session 6; the original version of this fact caused a bug.)
 8. **`--follow` accepts exactly one path.** Requesting it with several is an
    error from git, not a silent fallback.
 9. `origin/HEAD` is a symbolic ref naming the remote's default branch. It is not
@@ -250,9 +268,9 @@ Structurally already supported by `LogFilter` / `layoutGraph`; they need UI.
 - [x] #70 — filter the graph by file or folder → `LogFilter.paths`
 - [x] #171 — filter by author → `LogFilter.authors`
 - [x] #760 — filter displayed branches → `LogFilter.branches`
-- [ ] #360 — exclude branches by glob → `LogFilter.excludeGlobs`
-- [ ] #591 — arbitrary extra `git log` arguments → `LogFilter.extraArgs`
-- [ ] #207 — persistent branches get a dedicated column → `pinnedBranches`
+- [x] #360 — exclude branches by glob → `LogFilter.excludeGlobs`
+- [x] #591 — arbitrary extra `git log` arguments → `LogFilter.extraArgs`
+- [x] #207 — persistent branches get a dedicated column → `pinnedBranches`
 - [ ] #254 — branch colour on all commits → first-parent colour inheritance
 - [ ] #465 — filter by tag
 - [x] #147 — advanced search
@@ -380,3 +398,21 @@ comments ask to find tags that are not in the loaded commits. Both built.
 items. Proposed order: exclude globs (#360) and extra log args (#591) as
 settings (small), then pinned branch columns (#207, layout already supports
 `pinnedBranches`).
+
+### Session 6 — 2026-09-21
+
+**Goal:** #360 exclude globs, #591 extra log arguments, #207 pinned branches.
+
+The user verified search live and committed it. Read all three issues first.
+Testing `--exclude` against git showed fact 7 was wrong in a way that had
+already produced a bug (exclusions ignored for remotes and tags); fixed and
+covered by a test. #360's own example pattern (`heads/feature/*`) would not
+match anything with `--branches`; the setting's description explains the
+real rule.
+
+**Stopped at:** all three built, installed, awaiting the user's live check.
+
+**Next action:** fix whatever the live check finds. Remaining Phase 2 is
+lower-demand; worth asking the user whether to finish it or start Phase 3
+(write actions: checkout, branch, merge, rebase…), which is what most users
+will miss first.

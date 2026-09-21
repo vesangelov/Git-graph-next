@@ -58,19 +58,11 @@ export function revisionArgs(request: LogRequest, supportsExclude: boolean): str
 	const { filter } = request;
 	const args: string[] = [];
 
-	// --exclude only affects the ref globs that follow it, so it must precede
-	// --all / --branches / --remotes rather than trail them.
-	if (supportsExclude) {
-		for (const glob of filter.excludeGlobs) args.push(`--exclude=${glob}`);
-	}
-
 	if (filter.branches.length > 0) {
 		// An explicit branch selection replaces the ref globs entirely.
 		args.push(...filter.branches);
 	} else {
-		args.push('--branches');
-		if (filter.showRemoteBranches) args.push('--remotes');
-		if (filter.showTags) args.push('--tags');
+		args.push(...refGlobArgs(filter, supportsExclude));
 		// HEAD is not covered by --branches when the repository is detached.
 		if (request.includeHead !== false) args.push('HEAD');
 		if (request.includeCommitsMentionedByReflogs) args.push('--reflog');
@@ -80,13 +72,38 @@ export function revisionArgs(request: LogRequest, supportsExclude: boolean): str
 }
 
 /**
+ * `--branches` / `--remotes` / `--tags`, each preceded by the exclusions (#360).
+ *
+ * git applies accumulated `--exclude` patterns to the *next* ref glob option
+ * only, then clears them, so they must be repeated before every one. Each
+ * pattern matches the name inside that namespace (`feature/*` for a branch,
+ * `origin/feature/*` for a remote branch, `nightly-*` for a tag), and `*`
+ * crosses `/`.
+ */
+export function refGlobArgs(filter: Pick<LogFilter, 'excludeGlobs' | 'showRemoteBranches' | 'showTags'>, supportsExclude: boolean): string[] {
+	const excludes = supportsExclude ? filter.excludeGlobs.map((glob) => `--exclude=${glob}`) : [];
+	const args = [...excludes, '--branches'];
+	if (filter.showRemoteBranches) args.push(...excludes, '--remotes');
+	if (filter.showTags) args.push(...excludes, '--tags');
+	return args;
+}
+
+/**
  * True when the request drops commits from the middle of history (by author,
- * message, or a followed file), leaving parents that git does not rewrite.
+ * message, a followed file, or extra arguments), leaving parents that git does
+ * not rewrite.
  * Such results need `rewriteParents` to be drawn as a connected graph.
  */
 export function needsParentRewriting(request: LogRequest): boolean {
 	const { filter } = request;
-	return filter.authors.length > 0 || (filter.grep !== null && filter.grep !== '') || followsRenames(request);
+	return (
+		filter.authors.length > 0 ||
+		(filter.grep !== null && filter.grep !== '') ||
+		followsRenames(request) ||
+		// Extra arguments (#591) such as --no-merges or --since drop commits
+		// without git rewriting parents. Rewriting is a no-op when they don't.
+		filter.extraArgs.length > 0
+	);
 }
 
 function followsRenames(request: LogRequest): boolean {

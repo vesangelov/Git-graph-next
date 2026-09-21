@@ -237,3 +237,35 @@ test('ignores a filtered branch that no longer exists', async () => {
 	const data = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), branches: ['refs/heads/deleted'] } });
 	assert.equal(data.commits.length, 8, 'with nothing left to select, every branch is shown');
 });
+
+test('excludes branches in every namespace and reports the hidden refs', async () => {
+	const repo = initRepo(join(root, 'exclude'));
+	commitFile(repo, 'a.txt', '1\n', 'base');
+	fixture(repo, 'checkout', '-q', '-b', 'topic');
+	commitFile(repo, 't.txt', '1\n', 'topic work');
+	fixture(repo, 'remote', 'add', 'origin', 'https://example.invalid/repo.git');
+	fixture(repo, 'update-ref', 'refs/remotes/origin/topic', 'HEAD');
+	fixture(repo, 'tag', 'nightly-1');
+	fixture(repo, 'checkout', '-q', 'main');
+
+	const subjects = async (excludeGlobs: string[]) => {
+		const data = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), excludeGlobs } });
+		return { subjects: data.commits.map((c) => c.subject), excluded: [...data.excludedRefs].sort() };
+	};
+
+	// Only the local branch excluded: the remote copy and the tag still reach the commit.
+	assert.deepEqual((await subjects(['topic'])).subjects, ['topic work', 'base']);
+	assert.deepEqual((await subjects(['topic'])).excluded, ['refs/heads/topic']);
+
+	const all = await subjects(['*topic', 'nightly-*']);
+	assert.deepEqual(all.subjects, ['base'], 'patterns apply to remotes and tags too, not just --branches');
+	assert.deepEqual(all.excluded, ['refs/heads/topic', 'refs/remotes/origin/topic', 'refs/tags/nightly-1']);
+});
+
+test('extra log arguments that drop commits leave a connected graph', async () => {
+	const repo = join(root, 'filters');
+	const data = await loadGraphData(git, repo, { ...request, filter: { ...emptyFilter(), extraArgs: ['--no-merges'] } });
+	assert.ok(!data.commits.some((c) => c.subject === 'merge'));
+	assert.equal(data.commits.length, 7);
+	assertConnected(data.commits);
+});

@@ -240,6 +240,8 @@ export interface GraphData {
 	readonly remoteHeadSymrefs: Readonly<Record<string, string>>;
 	/** True when `git log` had more commits than were requested. */
 	readonly moreAvailable: boolean;
+	/** Full names of refs hidden by exclude patterns (#360); their labels are not drawn. */
+	readonly excludedRefs: readonly string[];
 	/** The `maxCommits` this data was loaded with, echoed for Load More. */
 	readonly maxCommits: number;
 }

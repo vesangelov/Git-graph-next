@@ -56,6 +56,7 @@ function data(): GraphData {
 		tags: [{ type: RefType.Tag, name: 'v1', hash: h('a'), annotated: true }],
 		remoteHeadSymrefs: { origin: 'origin/main' },
 		moreAvailable: false,
+		excludedRefs: [],
 		maxCommits: 100
 	};
 }

@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 import type { GitExecutor } from './executor.ts';
-import { GitLogReader, needsParentRewriting, type LogRequest } from './log.ts';
+import { GitLogReader, needsParentRewriting, refGlobArgs, type LogRequest } from './log.ts';
 import { GitRefReader, type RefsResult } from './refs.ts';
 import { rewriteParents } from '../graph/rewrite.ts';
 import { UNCOMMITTED, type Commit, type GraphData, type Hash, type LogFilter, type Stash } from '../types.ts';
@@ -172,6 +172,8 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 			: Promise.resolve(null)
 	]);
 
+	const excludedRefs = await findExcludedRefs(git, repoPath, logRequest, refs);
+
 	let commits = insertStashes(log.commits, stashes);
 	const changes = status !== null ? countStatusEntries(status) : 0;
 	const uncommittedParent = pathFiltered && !rewrite ? (headInPaths?.trim() || null) : state.headHash;
@@ -195,8 +197,28 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 		tags: request.filter.showTags ? refs.tags : [],
 		remoteHeadSymrefs: refs.remoteHeadSymrefs,
 		moreAvailable: log.moreAvailable,
+		excludedRefs,
 		maxCommits: request.maxCommits
 	};
+}
+
+/**
+ * The refs the exclude patterns hide (#360), so their labels are not drawn
+ * either. git itself is asked which refs survive the patterns, rather than
+ * re-implementing its matching rules.
+ */
+async function findExcludedRefs(git: GitExecutor, repo: string, request: LogRequest, refs: RefsResult): Promise<string[]> {
+	const { filter } = request;
+	if (filter.excludeGlobs.length === 0 || !git.atLeast(1, 9)) return [];
+	const output = await git.runOrNull(repo, ['rev-parse', '--symbolic-full-name', ...refGlobArgs(filter, true)]);
+	if (output === null) return [];
+	const kept = new Set(output.split('\n').filter((line) => line !== ''));
+	const all = [
+		...refs.heads.map((head) => `refs/heads/${head.name}`),
+		...(filter.showRemoteBranches ? refs.remoteHeads.map((remote) => `refs/remotes/${remote.name}`) : []),
+		...(filter.showTags ? refs.tags.map((tag) => `refs/tags/${tag.name}`) : [])
+	];
+	return all.filter((ref) => !kept.has(ref));
 }
 
 async function hasNoCommits(git: GitExecutor, repoPath: string): Promise<boolean> {

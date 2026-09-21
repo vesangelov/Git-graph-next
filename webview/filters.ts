@@ -1,6 +1,7 @@
 import type { GraphData } from '../src/types.ts';
 import { NO_FILTER, isFiltered, type FilterState } from '../src/view/protocol.ts';
 import { el } from './render/table.ts';
+import { joinArgs, splitArgs, validateArgs } from '../src/git/extraArgs.ts';
 
 export interface BranchOption {
 	/** Full ref name, as passed to git. */
@@ -8,12 +9,16 @@ export interface BranchOption {
 	/** Short name shown to the user. */
 	readonly name: string;
 	readonly remote: boolean;
+	/** Hidden by an exclude pattern (#360). */
+	readonly excluded: boolean;
 }
 
 /** The branches offered by the picker: locals first, then remotes, each alphabetical. */
 export function branchOptions(data: GraphData): BranchOption[] {
-	const locals = data.heads.map((head) => ({ ref: `refs/heads/${head.name}`, name: head.name, remote: false }));
-	const remotes = data.remoteHeads.map((remote) => ({ ref: `refs/remotes/${remote.name}`, name: remote.name, remote: true }));
+	const excluded = new Set(data.excludedRefs);
+	const option = (ref: string, name: string, remote: boolean) => ({ ref, name, remote, excluded: excluded.has(ref) });
+	const locals = data.heads.map((head) => option(`refs/heads/${head.name}`, head.name, false));
+	const remotes = data.remoteHeads.map((remote) => option(`refs/remotes/${remote.name}`, remote.name, true));
 	const byName = (a: BranchOption, b: BranchOption) => a.name.localeCompare(b.name);
 	return [...locals.sort(byName), ...remotes.sort(byName)];
 }
@@ -110,6 +115,73 @@ class ChipInput {
 }
 
 /**
+ * A text box for extra `git log` arguments (#591), applied on Enter or when
+ * focus leaves. Invalid input is reported inline and not applied, so a typo
+ * never replaces a working graph with an error.
+ */
+class ArgsInput {
+	readonly element: HTMLElement;
+	private readonly input: HTMLInputElement;
+	private readonly error: HTMLElement;
+	private applied: readonly string[] = [];
+
+	constructor(private readonly onChange: (args: string[]) => void) {
+		this.element = el('label', 'chip-field args-field');
+		this.element.appendChild(el('span', 'chip-label', 'git log'));
+		this.input = el('input');
+		this.input.placeholder = 'Extra arguments, e.g. --no-merges --since="1 month ago"';
+		this.input.spellcheck = false;
+		this.error = el('span', 'args-error');
+		this.element.append(this.input, this.error);
+
+		this.input.addEventListener('keydown', (event) => {
+			if (event.key === 'Enter') {
+				event.preventDefault();
+				this.apply();
+			} else if (event.key === 'Escape') {
+				this.set(this.applied);
+			}
+		});
+		this.input.addEventListener('blur', () => this.apply());
+		this.input.addEventListener('input', () => this.check());
+	}
+
+	set(args: readonly string[]): void {
+		this.applied = args;
+		this.input.value = joinArgs(args);
+		this.check();
+	}
+
+	/** Parses and validates the text; returns the arguments, or null after showing why not. */
+	private check(): string[] | null {
+		let args: string[];
+		try {
+			args = splitArgs(this.input.value);
+		} catch (error) {
+			return this.fail(error instanceof Error ? error.message : String(error));
+		}
+		const invalid = validateArgs(args);
+		if (invalid !== null) return this.fail(invalid);
+		this.error.textContent = '';
+		this.element.classList.remove('invalid');
+		return args;
+	}
+
+	private fail(message: string): null {
+		this.error.textContent = message;
+		this.element.classList.add('invalid');
+		return null;
+	}
+
+	private apply(): void {
+		const args = this.check();
+		if (args === null || joinArgs(args) === joinArgs(this.applied)) return;
+		this.applied = args;
+		this.onChange(args);
+	}
+}
+
+/**
  * The filter controls: a branch picker button for the toolbar (#760), and a
  * filter bar with author (#171) and path (#70) chips.
  */
@@ -120,6 +192,8 @@ export class FilterControls {
 	private readonly popup: HTMLElement;
 	private readonly authors: ChipInput;
 	private readonly paths: ChipInput;
+	private readonly excludes: ChipInput;
+	private readonly logArgs: ArgsInput;
 	private filter: FilterState = NO_FILTER;
 	private branches: readonly BranchOption[] = [];
 	private barOpen = false;
@@ -152,9 +226,14 @@ export class FilterControls {
 		this.bar = el('div', 'filter-bar');
 		this.authors = new ChipInput('Author', 'Name or e-mail, Enter to add', (v) => v.trim(), (authors) => this.update({ authors }));
 		this.paths = new ChipInput('Path', 'File or folder, Enter to add', normalisePath, (paths) => this.update({ paths }));
+		this.logArgs = new ArgsInput((logArgs) => this.update({ logArgs }));
+		this.excludes = new ChipInput('Hide', 'Pattern, e.g. dependabot/* — Enter to add', (v) => v.trim(), (excludes) => this.update({ excludes }));
+		this.excludes.element.title =
+			'Branches and tags matching these patterns are hidden (git log --exclude).\n' +
+			'A pattern matches the name without refs/…/: feature/* (local), origin/feature/* (remote), nightly-* (tags). * also matches /.';
 		const clear = el('button', 'link-button', 'Clear filters');
 		clear.addEventListener('click', () => this.update(NO_FILTER));
-		this.bar.append(this.authors.element, this.paths.element, clear);
+		this.bar.append(this.authors.element, this.paths.element, this.logArgs.element, clear);
 		this.render();
 	}
 
@@ -170,10 +249,16 @@ export class FilterControls {
 	set(filter: FilterState): void {
 		this.filter = filter;
 		// A filter applied from outside (View File History) must be visible.
-		if (filter.authors.length > 0 || filter.paths.length > 0) this.barOpen = true;
-		this.authors.set(filter.authors);
-		this.paths.set(filter.paths);
+		if (filter.authors.length > 0 || filter.paths.length > 0 || filter.logArgs.length > 0) this.barOpen = true;
+		this.syncInputs();
 		this.render();
+	}
+
+	private syncInputs(): void {
+		this.authors.set(this.filter.authors);
+		this.paths.set(this.filter.paths);
+		this.excludes.set(this.filter.excludes);
+		this.logArgs.set(this.filter.logArgs);
 	}
 
 	/** Refreshes the picker's branch list and the author suggestions from newly loaded data. */
@@ -186,8 +271,7 @@ export class FilterControls {
 
 	update(change: Partial<FilterState>): void {
 		this.filter = { ...this.filter, ...change };
-		this.authors.set(this.filter.authors);
-		this.paths.set(this.filter.paths);
+		this.syncInputs();
 		this.render();
 		if (!this.popup.hidden) this.renderPopup();
 		this.callbacks.onChange(this.filter);
@@ -196,11 +280,13 @@ export class FilterControls {
 	private render(): void {
 		const selected = this.filter.branches;
 		const short = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, '');
+		const hidden = this.filter.excludes.length;
 		this.branchButton.textContent =
-			selected.length === 0 ? 'All Branches' : selected.length === 1 ? short(selected[0]) : `${selected.length} Branches`;
-		this.branchButton.classList.toggle('active', selected.length > 0);
+			(selected.length === 0 ? 'All Branches' : selected.length === 1 ? short(selected[0]) : `${selected.length} Branches`) +
+			(hidden > 0 ? ` (${hidden} hidden)` : '');
+		this.branchButton.classList.toggle('active', selected.length > 0 || hidden > 0);
 
-		const count = this.filter.authors.length + this.filter.paths.length;
+		const count = this.filter.authors.length + this.filter.paths.length + (this.filter.logArgs.length > 0 ? 1 : 0);
 		this.toggleButton.textContent = count > 0 ? `Filter (${count})` : 'Filter';
 		this.toggleButton.classList.toggle('active', count > 0);
 		this.bar.hidden = !this.barOpen && count === 0;
@@ -241,12 +327,15 @@ export class FilterControls {
 					lastRemote = option.remote;
 				}
 				const checked = this.filter.branches.includes(option.ref);
-				rows.push(
-					this.branchRow(option.name, checked, () => {
-						const next = checked ? this.filter.branches.filter((r) => r !== option.ref) : [...this.filter.branches, option.ref];
-						this.update({ branches: next });
-					})
-				);
+				const row = this.branchRow(option.name, checked, () => {
+					const next = checked ? this.filter.branches.filter((r) => r !== option.ref) : [...this.filter.branches, option.ref];
+					this.update({ branches: next });
+				});
+				if (option.excluded) {
+					row.classList.add('excluded');
+					row.title = `${option.name} — hidden by an exclude pattern`;
+				}
+				rows.push(row);
 			}
 			list.replaceChildren(...rows);
 		};
@@ -258,7 +347,9 @@ export class FilterControls {
 			if (matches.length === 1) this.update({ branches: [matches[0].ref] });
 		});
 		fill();
-		this.popup.replaceChildren(search, list);
+		const hideSection = el('div', 'branch-hide');
+		hideSection.appendChild(this.excludes.element);
+		this.popup.replaceChildren(search, list, hideSection);
 		if (hadFocus) search.focus();
 	}
 

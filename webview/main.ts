@@ -1,7 +1,8 @@
 import { layoutGraph } from '../src/graph/layout.ts';
 import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GraphData, type Hash } from '../src/types.ts';
-import { NO_FILTER, isFiltered, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
+import { NO_FILTER, completeFilter, isFiltered, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
 import { FilterControls } from './filters.ts';
+import { escapeGlob, globMatches, resolvePins } from './pins.ts';
 import { SearchBar, type SearchStatus } from './search.ts';
 import { highlightTerms, matchesQuery, parseQuery, type SearchQuery, type SearchRef } from '../src/search/query.ts';
 import { DetailsPane, changeTarget } from './details.ts';
@@ -40,6 +41,8 @@ const state = {
 	detailsHeight: null as number | null,
 	/** Filter per repository path. The sidebar never filters. */
 	filters: {} as Record<string, FilterState>,
+	/** Branch names pinned from the context menu, per repository (#207). */
+	pins: {} as Record<string, readonly string[]>,
 	/** Author names seen per repository, offered as filter suggestions. */
 	authors: new Map<string, Set<string>>()
 };
@@ -50,7 +53,10 @@ if (saved !== undefined) {
 	state.showRemoteBranches = saved.showRemoteBranches;
 	state.restoreScrollTop = saved.scrollTop;
 	state.detailsHeight = saved.detailsHeight ?? null;
-	if (mode === 'panel') state.filters = { ...saved.filters };
+	if (mode === 'panel') {
+		for (const [repo, filter] of Object.entries(saved.filters ?? {})) state.filters[repo] = completeFilter(filter);
+	}
+	state.pins = { ...saved.pins };
 }
 
 function currentFilter(): FilterState {
@@ -70,7 +76,8 @@ function persist(): void {
 			scrollTop: table.scrollTop,
 			showRemoteBranches: state.showRemoteBranches,
 			detailsHeight: state.detailsHeight,
-			filters: state.filters
+			filters: state.filters,
+			pins: state.pins
 		});
 	}, 200);
 }
@@ -231,6 +238,20 @@ function switchRepo(repo: string | null): void {
 	search.history = 'idle';
 	search.pendingReveal = null;
 	if (mode === 'panel') filters.set(currentFilter());
+}
+
+// ---- Pinned branches (#207) -------------------------------------------------
+
+function currentPins(): readonly string[] {
+	return (state.repo !== null ? state.pins[state.repo] : undefined) ?? [];
+}
+
+function setPins(pins: readonly string[]): void {
+	if (state.repo === null) return;
+	state.pins[state.repo] = pins;
+	persist();
+	// Pinning is pure layout: redraw from the data already loaded.
+	if (state.data !== null) showGraph(state.data);
 }
 
 // ---- Search ---------------------------------------------------------------
@@ -396,10 +417,18 @@ function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 		const what = { head: 'Branch Name', remote: 'Branch Name', tag: 'Tag Name', stash: 'Stash Name' }[label.kind];
 		items.push({ label: `Copy ${what}`, action: copy(label.name, what.toLowerCase()) }, { separator: true });
 	}
-	if (mode === 'panel' && label !== null && (label.kind === 'head' || label.kind === 'remote')) {
+	if (label !== null && (label.kind === 'head' || label.kind === 'remote')) {
 		const ref = label.kind === 'head' ? `refs/heads/${label.name}` : `refs/remotes/${label.name}`;
-		items.push({ label: 'Show Only This Branch', action: () => filters.update({ branches: [ref] }) }, { separator: true });
+		if (mode === 'panel') items.push({ label: 'Show Only This Branch', action: () => filters.update({ branches: [ref] }) });
+		const pinnedBySetting = state.config?.pinnedBranches.some((pattern) => globMatches(pattern, label.name)) === true;
+		if (currentPins().includes(label.name)) items.push({ label: 'Unpin from Own Column', action: () => setPins(currentPins().filter((n) => n !== label.name)) });
+		else if (!pinnedBySetting) items.push({ label: 'Pin to Own Column', action: () => setPins([...currentPins(), label.name]) });
 	}
+	if (mode === 'panel' && label !== null && label.kind !== 'stash' && !label.current) {
+		const what = label.kind === 'tag' ? 'Tag' : 'Branch';
+		items.push({ label: `Hide This ${what}`, action: () => filters.update({ excludes: [...currentFilter().excludes, escapeGlob(label.name)] }) });
+	}
+	if (items.length > 0 && !('separator' in items[items.length - 1])) items.push({ separator: true });
 	if (commit.hash === UNCOMMITTED) {
 		items.push({ label: 'Copy Summary', action: copy(commit.subject, 'summary') });
 		return items;
@@ -474,7 +503,11 @@ function render(): void {
 function showGraph(data: GraphData): void {
 	const config = state.config;
 	if (config === null) return;
-	const layout = layoutGraph(data.commits, { colourCount: config.colours.length, uncommittedHash: UNCOMMITTED });
+	const layout = layoutGraph(data.commits, {
+		colourCount: config.colours.length,
+		uncommittedHash: UNCOMMITTED,
+		pinnedBranches: resolvePins(data, [...config.pinnedBranches, ...currentPins()])
+	});
 	const switchedRepo = state.data?.repo.path !== data.repo.path;
 	state.data = data;
 	if (mode === 'panel') {
