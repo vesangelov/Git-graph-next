@@ -36,11 +36,16 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | Language / build | TypeScript, esbuild | One bundler for extension and webview. No framework in the webview: the commit table must stay fast with 100k+ rows. |
 | Git access | Spawn the `git` binary | Full feature coverage. Wrapped behind `GitExecutor` so a future web build (#687) has a seam to swap. |
 | Tests | `node:test`, esbuild-compiled | This Node build lacks type stripping (`ERR_NO_TYPESCRIPT`), so tests are bundled to `out/test/` first. |
+| Graph layout location | Computed in the webview | `layoutGraph` is pure; the host sends commits + refs only, and the view can re-layout without a round trip. |
+| Stash rows | One synthetic row per stash, parent = base commit only | A stash is really a 2–3 parent merge with an internal "index on…" commit; drawing that is noise. Inserted by date, never below its base. |
+| Context menu | Own DOM menu in the webview | #873 / #863. No native webview menu contributions at all. |
+| Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewFileHistory`, `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
+| Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
 
 ### Deferred / not yet decided
 
 - Marketplace publisher identity (`publisher` in `package.json` is a placeholder).
-- Extension icon (`media/icon.png` does not exist yet — packaging will fail until it does).
+- Extension icon. `media/icon.png` is a generated placeholder so packaging works; replace in Phase 4.
 - Whether to support `vscode.dev` (#687). The `GitExecutor` seam exists; nothing depends on the answer yet.
 
 ---
@@ -67,9 +72,38 @@ Foundation layer. **26/26 tests pass, `tsc --noEmit` clean.**
   bodies, merges, annotated and lightweight tags, detached HEAD, stashes, and a
   genuine merge conflict.
 
+Phase 1 (session 2). **42/42 tests pass, `tsc --noEmit` clean, packaged and
+installed.** Awaiting live verification by the user.
+
+- `src/git/repository.ts` — repository discovery (enclosing repo + nested scan
+  honouring `maxDepthOfRepoSearch`, skipping `node_modules` etc.). No `vscode`.
+- `src/git/graphData.ts` — one call assembling commits, refs, stash rows and the
+  Uncommitted Changes row. Handles empty repos and unborn HEAD (orphan branch).
+- `src/repoManager.ts` — merges `vscode.git` API repos, the workspace scan and
+  manually added repos (stored in `workspaceState`). Every Git-extension member is
+  treated as possibly absent (#794, #863).
+- `src/config.ts` — typed, validated reads of every setting.
+- `src/view/protocol.ts` — discriminated-union messages both ways.
+- `src/view/panel.ts` — single panel, CSP with nonce and no `unsafe-inline`,
+  `retainContextWhenHidden`, serializer (restores after reload/restart),
+  debounced file-watcher auto-refresh (deferred while hidden), stale-response
+  guard via a load generation counter.
+- `webview/main.ts`, `webview/menu.ts`, `webview/format.ts`,
+  `webview/render/graph.ts`, `webview/render/table.ts`, `webview/style.css` —
+  virtualised table (only visible rows + overscan in the DOM, graph SVG redrawn
+  for the same window), sticky header (#132), ref labels with local/remote
+  folding, date formats, load-more (auto and button), repo selector, remote
+  toggle, own context menu (copy hash / subject / ref name), keyboard ↑/↓,
+  scroll + repo persisted via `vscode.setState`.
+- `src/extension.ts` — activation, commands (`view`, `viewForRepo`, `refresh`,
+  `addGitRepository`, `removeGitRepository`), status bar item, serializer.
+- Tests: `test/graphData.integration.test.ts` (7), `test/render.test.ts` (9).
+- `.gitignore`, `.vscodeignore`, `@vscode/vsce` as a dev dependency.
+
 ### Not started
 
-Everything in the UI layer. Nothing renders yet; the extension does not activate.
+Commit details panel (click a commit → files changed, diff). Not in the Phase 1
+list, but it is the first thing users will expect; proposed as the next step.
 
 ---
 
@@ -109,33 +143,33 @@ Verified empirically against git 2.53. These cost debugging time once already.
 
 Ordered by what unblocks the most. Issue numbers are the demand signal.
 
-### Phase 1 — make it render (next up)
+### Phase 1 — make it render (built, awaiting live verification)
 
 The goal is a graph on screen against a real repository.
 
-- [ ] `src/git/repository.ts` — discover repositories: the `vscode.git`
+- [x] `src/git/repository.ts` — discover repositories: the `vscode.git`
       extension API first, workspace folder scan as fallback, honouring
       `maxDepthOfRepoSearch`.
-- [ ] `src/view/protocol.ts` — typed request/response messages.
-- [ ] `src/view/panel.ts` — the webview panel: strict CSP with a nonce,
+- [x] `src/view/protocol.ts` — typed request/response messages.
+- [x] `src/view/panel.ts` — the webview panel: strict CSP with a nonce,
       `retainContextWhenHidden`, state restore across reloads.
-- [ ] `webview/render/graph.ts` — SVG renderer consuming `GraphLayout`.
-- [ ] `webview/render/table.ts` — virtualised commit table; only visible rows in
+- [x] `webview/render/graph.ts` — SVG renderer consuming `GraphLayout`.
+- [x] `webview/render/table.ts` — virtualised commit table; only visible rows in
       the DOM. **Sticky header (#132).**
-- [ ] `webview/style.css` — themed entirely from VS Code CSS variables so light,
+- [x] `webview/style.css` — themed entirely from VS Code CSS variables so light,
       dark and high-contrast all work without a per-theme branch.
-- [ ] `src/extension.ts` — activation, command registration, status bar item.
+- [x] `src/extension.ts` — activation, command registration, status bar item.
 
 **Fix while building, do not retrofit** — these are why users are leaving today:
 
-- [ ] #903 — SCM title icon disappears. `when` clauses must not depend on
+- [x] #903 — SCM title icon disappears. `when` clauses must not depend on
       context keys that are never set; set `gitGraphNext.enabled` explicitly on
       activation.
-- [ ] #794 — `Cannot read properties of null (reading 'rootUri')`. Never assume
+- [x] #794 — `Cannot read properties of null (reading 'rootUri')`. Never assume
       the git extension has a repository for the active editor.
-- [ ] #873 — right-click broken after VS Code 1.97. Own context menu inside the
+- [x] #873 — right-click broken after VS Code 1.97. Own context menu inside the
       webview; do not rely on native menu behaviour.
-- [ ] #863 — context menu absent in VSCodium. No dependency on
+- [x] #863 — context menu absent in VSCodium. No dependency on
       Marketplace-only or proprietary-build APIs.
 
 ### Phase 2 — read-only power features
@@ -207,3 +241,27 @@ the tests rather than by users: the two NUL-format discrepancies and the
 
 **Next action:** Phase 1, starting with `src/git/repository.ts` (repository
 discovery), since panel and webview both depend on having a repository to show.
+
+### Session 2 — 2026-09-21
+
+**Goal:** Phase 1 — a graph on screen against a real repository.
+
+Built everything in the Phase 1 list plus the pieces it implied (data loader,
+config, repo manager, context menu). Deviation from the plan: repository
+discovery is split in two — the `vscode`-free scan in `src/git/repository.ts`
+(testable) and the `vscode.git` bridge in `src/repoManager.ts`.
+
+Found that `node_modules/` and `out/` were committed in the initial commit
+(there was no `.gitignore`). Added one; the user needs to untrack them with
+`git rm -r --cached node_modules out`.
+
+Known gaps, deliberately left: no column resizing; worktrees whose `.git` is a
+file get no auto-refresh on ref changes (the watcher only sees the working
+tree); settings for not-yet-built features (`showEditorTitleIcon`, signing,
+fetch/prune, `integratedTerminalShell`, `graph.uncommittedChanges`,
+`referenceLabels.alignment`) exist but do nothing yet.
+
+**Stopped at:** Phase 1 built, installed, awaiting the user's live check.
+
+**Next action:** fix whatever the live check finds; then the commit details
+panel (click a commit → changed files, open diff), before Phase 2 filters.

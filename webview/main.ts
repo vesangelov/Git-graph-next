@@ -1,0 +1,274 @@
+import { layoutGraph } from '../src/graph/layout.ts';
+import { UNCOMMITTED, type Commit, type GraphData } from '../src/types.ts';
+import type { HostMessage, LoadOptions, PersistedViewState, RepoOption, ViewConfig, WebviewMessage } from '../src/view/protocol.ts';
+import { ContextMenu, type MenuItem } from './menu.ts';
+import { CommitTable, el, type RefLabel } from './render/table.ts';
+
+interface VsCodeApi {
+	postMessage(message: WebviewMessage): void;
+	getState(): PersistedViewState | undefined;
+	setState(state: PersistedViewState): void;
+}
+declare function acquireVsCodeApi(): VsCodeApi;
+
+const vscode = acquireVsCodeApi();
+
+/** The whole client-side state; everything on screen is derived from it. */
+const state = {
+	config: null as ViewConfig | null,
+	repos: [] as readonly RepoOption[],
+	repo: null as string | null,
+	data: null as GraphData | null,
+	loading: false,
+	error: null as string | null,
+	/** Remote-branch toggle; null until the user changes it, meaning "use the setting". */
+	showRemoteBranches: null as boolean | null,
+	/** Scroll position to apply once the first graph for the restored repo arrives. */
+	restoreScrollTop: null as number | null
+};
+
+const saved = vscode.getState();
+if (saved !== undefined) {
+	state.repo = saved.repo;
+	state.showRemoteBranches = saved.showRemoteBranches;
+	state.restoreScrollTop = saved.scrollTop;
+}
+
+function post(message: WebviewMessage): void {
+	vscode.postMessage(message);
+}
+
+let saveTimer = 0;
+function persist(): void {
+	clearTimeout(saveTimer);
+	saveTimer = window.setTimeout(() => {
+		vscode.setState({ repo: state.repo, scrollTop: table.scrollTop, showRemoteBranches: state.showRemoteBranches });
+	}, 200);
+}
+
+// ---- DOM ------------------------------------------------------------------
+
+const app = document.getElementById('app')!;
+const toolbar = el('div', 'toolbar');
+
+const repoLabel = el('label', 'control');
+repoLabel.appendChild(el('span', '', 'Repo'));
+const repoSelect = el('select');
+repoSelect.title = 'Repository';
+repoLabel.appendChild(repoSelect);
+
+const remoteLabel = el('label', 'control');
+const remoteCheckbox = el('input');
+remoteCheckbox.type = 'checkbox';
+remoteLabel.append(remoteCheckbox, el('span', '', 'Show Remote Branches'));
+
+const statusText = el('span', 'status');
+const spacer = el('span', 'spacer');
+const refreshButton = el('button', 'icon-button', '⟳');
+refreshButton.title = 'Refresh';
+
+toolbar.append(repoLabel, remoteLabel, spacer, statusText, refreshButton);
+
+const message = el('div', 'message');
+message.hidden = true;
+
+const table = new CommitTable({
+	onSelect: () => undefined,
+	onContextMenu: (event, commit, label) => menu.open(event.clientX, event.clientY, menuItems(commit, label)),
+	onNearEnd: () => {
+		if (state.config?.loadMoreCommitsAutomatically === true) loadMore();
+	},
+	onScroll: () => {
+		menu.close();
+		persist();
+	}
+});
+
+const menu = new ContextMenu();
+app.append(toolbar, message, table.element, menu.element);
+
+// ---- Behaviour ------------------------------------------------------------
+
+function showRemoteBranches(): boolean {
+	return state.showRemoteBranches ?? state.config?.showRemoteBranches ?? true;
+}
+
+function request(maxCommits: number): void {
+	if (state.repo === null || state.config === null) return;
+	const options: LoadOptions = {
+		repo: state.repo,
+		maxCommits,
+		showRemoteBranches: showRemoteBranches(),
+		showTags: state.config.showTags
+	};
+	state.loading = true;
+	post({ type: 'load', options });
+	render();
+}
+
+function reload(): void {
+	if (state.config === null) return;
+	// Keep however many commits are already on screen, so a refresh never
+	// pulls the rows out from under the user's scroll position.
+	request(Math.max(state.config.maxCommits, state.data?.repo.path === state.repo ? state.data.maxCommits : 0));
+}
+
+function loadMore(): void {
+	if (state.loading || state.config === null || state.data === null || !state.data.moreAvailable) return;
+	request(state.data.maxCommits + state.config.loadMoreCommits);
+}
+
+function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
+	const copy = (text: string, what: string) => () => post({ type: 'copyToClipboard', text, label: what });
+	const items: MenuItem[] = [];
+	if (label !== null) {
+		const what = { head: 'Branch Name', remote: 'Branch Name', tag: 'Tag Name', stash: 'Stash Name' }[label.kind];
+		items.push({ label: `Copy ${what}`, action: copy(label.name, what.toLowerCase()) }, { separator: true });
+	}
+	if (commit.hash === UNCOMMITTED) {
+		items.push({ label: 'Copy Summary', action: copy(commit.subject, 'summary') });
+		return items;
+	}
+	items.push(
+		{ label: 'Copy Commit Hash', action: copy(commit.hash, 'commit hash') },
+		{ label: 'Copy Short Hash', action: copy(commit.hash.slice(0, 8), 'short hash') },
+		{ label: 'Copy Commit Subject', action: copy(commit.subject, 'commit subject') }
+	);
+	return items;
+}
+
+// ---- Rendering ------------------------------------------------------------
+
+function renderRepos(): void {
+	repoSelect.replaceChildren(
+		...state.repos.map((repo) => {
+			const option = el('option', '', repo.name);
+			option.value = repo.path;
+			option.title = repo.path;
+			return option;
+		})
+	);
+	if (state.repo !== null) repoSelect.value = state.repo;
+	repoLabel.hidden = state.repos.length <= 1;
+}
+
+function render(): void {
+	remoteCheckbox.checked = showRemoteBranches();
+
+	const data = state.data !== null && state.data.repo.path === state.repo ? state.data : null;
+	let text = '';
+	if (state.loading) text = 'Loading…';
+	else if (data !== null) {
+		const count = data.commits.filter((c) => c.hash !== UNCOMMITTED && c.stash === null).length;
+		const head = data.repo.isDetached ? 'detached HEAD' : data.repo.head;
+		text = `${count}${data.moreAvailable ? '+' : ''} commits · ${head ?? ''}`;
+		if (data.repo.pendingOperation !== null) text += ` · ${data.repo.pendingOperation} in progress`;
+	}
+	statusText.textContent = text;
+
+	let note: string | null = null;
+	if (state.repos.length === 0 && state.config !== null) {
+		note = 'No Git repositories were found in this workspace. Open a folder containing a repository, or run "Git Graph Next: Add Git Repository...".';
+	} else if (state.error !== null) {
+		note = state.error;
+	} else if (data !== null && data.commits.length === 0) {
+		note = 'This repository has no commits yet.';
+	}
+	message.textContent = note ?? '';
+	message.hidden = note === null;
+	message.classList.toggle('error', state.error !== null);
+	table.element.hidden = data === null || data.commits.length === 0;
+
+	const footer = table.footerElement;
+	footer.replaceChildren();
+	if (data !== null && data.moreAvailable) {
+		const button = el('button', 'load-more', state.loading ? 'Loading…' : 'Load More Commits');
+		button.disabled = state.loading;
+		button.addEventListener('click', loadMore);
+		footer.appendChild(button);
+	}
+}
+
+function showGraph(data: GraphData): void {
+	const config = state.config;
+	if (config === null) return;
+	const layout = layoutGraph(data.commits, { colourCount: config.colours.length, uncommittedHash: UNCOMMITTED });
+	const switchedRepo = state.data?.repo.path !== data.repo.path;
+	state.data = data;
+	// Unhide before measuring: a hidden element has no size and ignores scrollTop.
+	table.element.hidden = data.commits.length === 0;
+	table.setData(data, layout, config);
+	if (state.restoreScrollTop !== null) {
+		table.scrollTop = state.restoreScrollTop;
+		state.restoreScrollTop = null;
+	} else if (switchedRepo) {
+		table.scrollTop = 0;
+	}
+}
+
+// ---- Messages -------------------------------------------------------------
+
+window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
+	const msg = event.data;
+	switch (msg.type) {
+		case 'config': {
+			const first = state.config === null;
+			state.config = msg.config;
+			if (!first && state.data !== null) showGraph(state.data);
+			break;
+		}
+		case 'repos': {
+			state.repos = msg.repos;
+			const switched = msg.selected !== state.repo;
+			if (switched) {
+				// The remembered scroll position belongs to the remembered repository only.
+				if (msg.selected !== saved?.repo) state.restoreScrollTop = null;
+				state.repo = msg.selected;
+				state.data = null;
+				state.error = null;
+				state.loading = false;
+				table.clear();
+			}
+			renderRepos();
+			persist();
+			if (state.repo !== null && (switched || (state.data === null && !state.loading))) reload();
+			break;
+		}
+		case 'loading':
+			if (msg.repo === state.repo) state.loading = true;
+			break;
+		case 'graph':
+			if (msg.data.repo.path !== state.repo) return;
+			state.loading = false;
+			state.error = null;
+			showGraph(msg.data);
+			break;
+		case 'error':
+			if (msg.repo !== null && msg.repo !== state.repo) return;
+			state.loading = false;
+			state.error = msg.message;
+			break;
+	}
+	render();
+});
+
+repoSelect.addEventListener('change', () => {
+	state.repo = repoSelect.value;
+	state.data = null;
+	state.error = null;
+	state.restoreScrollTop = null;
+	table.clear();
+	persist();
+	reload();
+});
+
+remoteCheckbox.addEventListener('change', () => {
+	state.showRemoteBranches = remoteCheckbox.checked;
+	persist();
+	reload();
+});
+
+refreshButton.addEventListener('click', reload);
+
+render();
+post({ type: 'ready', repo: state.repo });

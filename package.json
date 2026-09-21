@@ -27,7 +27,8 @@
   },
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:gitGraphNext.view"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -50,17 +51,6 @@
         "icon": "$(git-branch)"
       },
       {
-        "command": "gitGraphNext.viewFileHistory",
-        "title": "View Git Graph (File History)",
-        "category": "Git Graph Next",
-        "icon": "$(git-branch)"
-      },
-      {
-        "command": "gitGraphNext.viewLineHistory",
-        "title": "View Git Graph (Line History)",
-        "category": "Git Graph Next"
-      },
-      {
         "command": "gitGraphNext.refresh",
         "title": "Refresh Git Graph",
         "category": "Git Graph Next",
@@ -75,36 +65,12 @@
         "command": "gitGraphNext.removeGitRepository",
         "title": "Remove Git Repository...",
         "category": "Git Graph Next"
-      },
-      {
-        "command": "gitGraphNext.clearAvatarCache",
-        "title": "Clear Avatar Cache",
-        "category": "Git Graph Next"
-      },
-      {
-        "command": "gitGraphNext.resumeWorkspaceCodeReview",
-        "title": "Resume a specific Code Review in Workspace...",
-        "category": "Git Graph Next"
-      },
-      {
-        "command": "gitGraphNext.endAllWorkspaceCodeReviews",
-        "title": "End All Code Reviews in Workspace",
-        "category": "Git Graph Next"
-      },
-      {
-        "command": "gitGraphNext.openDiffOfCommit",
-        "title": "Open Diff of Commit",
-        "category": "Git Graph Next"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "gitGraphNext.viewForRepo",
-          "when": "false"
-        },
-        {
-          "command": "gitGraphNext.openDiffOfCommit",
           "when": "false"
         }
       ],
@@ -115,26 +81,7 @@
           "when": "config.git-graph-next.showScmTitleIcon && gitGraphNext.enabled"
         }
       ],
-      "editor/title": [
-        {
-          "command": "gitGraphNext.viewFileHistory",
-          "group": "navigation@100",
-          "when": "config.git-graph-next.showEditorTitleIcon && gitGraphNext.enabled && gitGraphNext.editorInRepo"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "gitGraphNext.viewLineHistory",
-          "group": "gitGraphNext@1",
-          "when": "gitGraphNext.enabled && gitGraphNext.editorInRepo"
-        }
-      ],
       "explorer/context": [
-        {
-          "command": "gitGraphNext.viewFileHistory",
-          "group": "gitGraphNext@1",
-          "when": "gitGraphNext.enabled && !explorerResourceIsFolder"
-        },
         {
           "command": "gitGraphNext.viewForRepo",
           "group": "gitGraphNext@1",
@@ -397,7 +344,8 @@
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.24.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "@vscode/vsce": "^4.0.0"
   },
   "repository": {
     "type": "git",

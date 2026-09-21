@@ -22,6 +22,12 @@ export interface LogRequest {
 	readonly followRenames: boolean;
 	/** Include commits reachable only from stash entries. */
 	readonly includeStashes: boolean;
+	/**
+	 * Pass `HEAD` as a starting point. Must be false when HEAD is unborn (an
+	 * empty repository, or an orphan branch), where git rejects it outright.
+	 * Defaults to true.
+	 */
+	readonly includeHead?: boolean;
 }
 
 export interface LogResult {
@@ -73,7 +79,7 @@ export function buildLogArgs(request: LogRequest, supportsExclude: boolean): str
 		if (filter.showRemoteBranches) args.push('--remotes');
 		if (filter.showTags) args.push('--tags');
 		// HEAD is not covered by --branches when the repository is detached.
-		args.push('HEAD');
+		if (request.includeHead !== false) args.push('HEAD');
 		if (request.includeCommitsMentionedByReflogs) args.push('--reflog');
 		if (request.includeStashes) args.push('--glob=refs/stash');
 	}

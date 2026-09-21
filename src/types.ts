@@ -209,6 +209,30 @@ export interface RepoState {
 	readonly pendingOperation: PendingOperation | null;
 }
 
+/**
+ * Everything the view needs to draw one repository's graph, in one message.
+ *
+ * Layout is deliberately absent: it is a pure function of `commits`, so the
+ * webview computes it and can redo it without a round trip to the host.
+ */
+export interface GraphData {
+	readonly repo: RepoState;
+	/**
+	 * Rows in display order. May start with the synthetic Uncommitted Changes
+	 * row (hash `UNCOMMITTED`) and contains stash rows, identified by `stash`.
+	 */
+	readonly commits: readonly Commit[];
+	readonly heads: readonly HeadRef[];
+	readonly remoteHeads: readonly RemoteHeadRef[];
+	readonly tags: readonly TagRef[];
+	/** Remote name to the branch its HEAD points at, e.g. `origin` → `origin/main`. */
+	readonly remoteHeadSymrefs: Readonly<Record<string, string>>;
+	/** True when `git log` had more commits than were requested. */
+	readonly moreAvailable: boolean;
+	/** The `maxCommits` this data was loaded with, echoed for Load More. */
+	readonly maxCommits: number;
+}
+
 export const PendingOperation = {
 	Merge: 'merge',
 	Rebase: 'rebase',

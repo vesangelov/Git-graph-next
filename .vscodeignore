@@ -1,0 +1,9 @@
+# Only the bundled output, the manifest, and the notices ship in the .vsix.
+**
+!dist/**
+!media/**
+!package.json
+!LICENSE
+!NOTICE.md
+!README.md
+!CHANGELOG.md
