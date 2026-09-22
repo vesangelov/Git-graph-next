@@ -6,7 +6,7 @@ import { GraphPanel, VIEW_TYPE } from './view/panel.ts';
 import { GraphController, type GraphServices } from './view/controller.ts';
 import { GraphSidebarProvider, SIDEBAR_VIEW_ID } from './view/sidebar.ts';
 import { ChangeItem, ChangesService } from './view/changesView.ts';
-import { REVISION_SCHEME, RevisionContentProvider, openChangeDiff, openWorkingFile } from './view/diff.ts';
+import { REVISION_SCHEME, RevisionFileSystem, openChangeDiff, openWorkingFile } from './view/diff.ts';
 import { gitPathCandidates, retainContextWhenHidden, showStatusBarItem } from './config.ts';
 
 /**
@@ -60,6 +60,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('gitGraphNext.refresh', () => GraphController.refreshAll()),
+		vscode.commands.registerCommand('gitGraphNext.toggleCompact', () => sidebar.toggleCompact()),
 
 		// History of a file or folder (#70): the Explorer passes the clicked
 		// resource, the editor title passes the document, the palette nothing.
@@ -92,7 +93,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			vscode.window.setStatusBarMessage('Copied path to the clipboard', 3000);
 		}),
 
-		vscode.workspace.registerTextDocumentContentProvider(REVISION_SCHEME, new RevisionContentProvider(git)),
+		vscode.workspace.registerFileSystemProvider(REVISION_SCHEME, new RevisionFileSystem(git), { isReadonly: true, isCaseSensitive: true }),
 		vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, { webviewOptions: { retainContextWhenHidden: retainContextWhenHidden() } }),
 
 		vscode.commands.registerCommand('gitGraphNext.addGitRepository', async () => {

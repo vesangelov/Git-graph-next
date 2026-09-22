@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GitExecutor } from '../src/git/executor.ts';
-import { parseNameStatus, parseNumstat, readChanges, readFileAtRevision } from '../src/git/changes.ts';
+import { emptySideContent, parseNameStatus, parseNumstat, readBlobAtRevision, readChanges } from '../src/git/changes.ts';
 import { UNCOMMITTED } from '../src/types.ts';
 
 let repo: string;
@@ -99,8 +99,15 @@ test('lists uncommitted changes including untracked files', async () => {
 	}
 });
 
-test('reads a file at a revision, and an empty string when it does not exist there', async () => {
-	assert.equal(await readFileAtRevision(git, repo, hashes.root, 'gone.txt'), 'bye\n');
-	assert.equal(await readFileAtRevision(git, repo, hashes.second, 'gone.txt'), '');
-	assert.match(await readFileAtRevision(git, repo, hashes.second, 'bin.dat'), /^Binary file/);
+test('reads a file at a revision as bytes, and null when it does not exist there', async () => {
+	assert.equal((await readBlobAtRevision(git, repo, hashes.root, 'gone.txt'))?.toString(), 'bye\n');
+	assert.equal(await readBlobAtRevision(git, repo, hashes.second, 'gone.txt'), null);
+	assert.deepEqual([...(await readBlobAtRevision(git, repo, hashes.second, 'bin.dat'))!], [0, 1, 2, 3, 0, 255], 'binary content is byte-exact');
+});
+
+test('the empty side of a notebook diff is still a valid notebook', () => {
+	assert.equal(emptySideContent('a.txt'), '');
+	const notebook = JSON.parse(emptySideContent('dir/Analysis.IPYNB'));
+	assert.deepEqual(notebook.cells, []);
+	assert.equal(notebook.nbformat, 4);
 });

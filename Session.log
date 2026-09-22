@@ -49,6 +49,11 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | Exclusions (#360) | Setting `excludeBranches` + per-repo patterns in the Branches dropdown + "Hide This Branch/Tag"; hidden refs' labels come from asking git (`rev-parse` with the same globs) | Label hiding follows git's own matching rules exactly instead of a re-implementation. |
 | Extra log args (#591) | Setting `extraLogArguments` + per-repo text field in the Filter bar, shell-style quoting, no expansion; a deny-list with reasons (format/diff/count/`--reverse`/`-g`/`--output`/external programs/colour/`--`), enforced on the host | Everything else is allowed. Any extra args turn on parent rewriting (e.g. `--no-merges` drops commits git does not reconnect). |
 | Pinned branches (#207) | Setting `graph.pinnedBranches` (globs, priority order) + per-repo "Pin to Own Column" from a label; default none | Pinned lanes take the leftmost columns and the first colours, so they are also stably coloured. Only branches whose tip is loaded are pinned. |
+| Revision documents (#598) | A read-only `FileSystemProvider` for `git-graph-next:` instead of a text content provider; the missing side of a `.ipynb` diff is an empty but valid notebook | VS Code opens notebooks and other custom editors only from a file system. Also byte-exact for binaries. |
+| Git notes (#475) | `git notes list` marks noted commits (badge); the text is read with `git notes show` only when a commit is opened | Note blobs never enter the NUL-delimited log output, so they cannot corrupt parsing. |
+| Issue links (#313) | Auto-detected GitHub (`#n`) / GitLab (`#n`, `!n`) rules from the origin remote + configurable rules with `$1…` and `${host}/${owner}/${repo}/${repoUrl}`; host opens http(s) only | One global rule can serve every repo (asked for in the issue's comments). |
+| Branch colours (#254) | `graph.branchColours` (pattern → colour, fixed along first-parent history) + opt-in `graph.colourCommitRows` stripe | Default look unchanged unless enabled. |
+| Compact mode (#387) | Fold runs of ≥3 adjacent commits with one parent, one child, no label, not HEAD / match / selected into a stand-in row that keeps the first hash (so no edge rewriting); click expands | Shows the branch structure but keeps the hidden commit count visible. Adjacent-row runs only: in date order an interleaved chain folds less than in topological order. |
 | Filter scope | Per repository, persisted in the panel's webview state; the sidebar never filters | Keeps the sidebar a quick overview. |
 | Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
 | Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
@@ -174,10 +179,29 @@ Session 6 — exclusions, extra args, pinned branches. **84/84 tests pass,
   Label context menu: Pin to Own Column / Unpin, Hide This Branch / Tag.
 - Tests: `test/options.test.ts` (8) + 2 integration tests.
 
+Session 7 — the rest of Phase 2. **96/96 tests pass, `tsc --noEmit` clean,
+packaged and installed.** Awaiting live verification. **Phase 2 complete.**
+
+- #465 tags in the branch picker (group "Tags"), "Show Only This Tag".
+- #598 `RevisionFileSystem` in `src/view/diff.ts`; `readBlobAtRevision`,
+  `emptySideContent` in changes.ts.
+- #475 `listNotedCommits` / `readNote`; setting `showNotes`; note badge and a
+  Notes section in the details.
+- #313 `src/git/remote.ts` (`parseRemoteUrl`, `resolveIssueLinks`,
+  `linkify`); settings `issueLinking.autoDetect`, `issueLinking.rules`.
+- #254 `laneColours` layout option; `resolveBranchColours`; settings
+  `graph.branchColours`, `graph.colourCommitRows`.
+- #387 `src/graph/collapse.ts`; "Compact" toolbar button, sidebar title
+  button, context menu on folded rows; state persisted.
+- Tests: `test/remote.test.ts` (3), `test/collapse.test.ts` (4), 3 colour
+  tests, notes and notebook tests.
+
+Known gap: the webview code has no automated test that runs it (only the
+type checker and the pure modules it imports); the live check covers it.
+
 ### Not started
 
-Rest of Phase 2: tag filter (#465), collapsible sections (#387), richer issue
-linking (#313), git notes (#475), notebook diffs (#598).
+Phase 3 — write actions.
 
 ---
 
@@ -261,7 +285,7 @@ The goal is a graph on screen against a real repository.
 - [x] #863 — context menu absent in VSCodium. No dependency on
       Marketplace-only or proprietary-build APIs.
 
-### Phase 2 — read-only power features
+### Phase 2 — read-only power features (complete, session 7)
 
 Structurally already supported by `LogFilter` / `layoutGraph`; they need UI.
 
@@ -271,13 +295,13 @@ Structurally already supported by `LogFilter` / `layoutGraph`; they need UI.
 - [x] #360 — exclude branches by glob → `LogFilter.excludeGlobs`
 - [x] #591 — arbitrary extra `git log` arguments → `LogFilter.extraArgs`
 - [x] #207 — persistent branches get a dedicated column → `pinnedBranches`
-- [ ] #254 — branch colour on all commits → first-parent colour inheritance
-- [ ] #465 — filter by tag
+- [x] #254 — branch colour on all commits → first-parent colour inheritance
+- [x] #465 — filter by tag
 - [x] #147 — advanced search
-- [ ] #387 — collapsible graph sections
-- [ ] #313 — richer issue linking
-- [ ] #475 — display git notes
-- [ ] #598 — rich diff for Jupyter notebooks
+- [x] #387 — collapsible graph sections
+- [x] #313 — richer issue linking
+- [x] #475 — display git notes
+- [x] #598 — rich diff for Jupyter notebooks
 - [x] #781 — minimal graph in the side panel (session 3)
 
 ### Phase 3 — write actions
@@ -416,3 +440,20 @@ real rule.
 lower-demand; worth asking the user whether to finish it or start Phase 3
 (write actions: checkout, branch, merge, rebase…), which is what most users
 will miss first.
+
+### Session 7 — 2026-09-21
+
+**Goal:** finish Phase 2 (user's request), then Phase 3.
+
+The user verified session 6 live and committed it. Read all six remaining
+issues first. Built #465, #598, #475, #313, #254 and #387 (see §3). The
+switch to a file system provider (#598) changes how *every* diff side is
+served, so the live check should include ordinary text diffs, not only
+notebooks.
+
+**Stopped at:** Phase 2 complete, installed, awaiting the user's live check.
+
+**Next action:** fix whatever the live check finds; then Phase 3, starting
+with the read-safe foundation for write actions: a confirmation dialog in the
+webview, an action runner on the host that reports git errors, and the first
+actions (checkout, create/delete branch, create/delete tag, fetch).

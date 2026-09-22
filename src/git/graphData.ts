@@ -3,6 +3,7 @@ import type { GitExecutor } from './executor.ts';
 import { GitLogReader, needsParentRewriting, refGlobArgs, type LogRequest } from './log.ts';
 import { GitRefReader, type RefsResult } from './refs.ts';
 import { rewriteParents } from '../graph/rewrite.ts';
+import { parseRemoteUrl, resolveIssueLinks, type IssueLinkSetting, type RemoteInfo } from './remote.ts';
 import { UNCOMMITTED, type Commit, type GraphData, type Hash, type LogFilter, type Stash } from '../types.ts';
 
 export interface GraphDataRequest {
@@ -13,6 +14,12 @@ export interface GraphDataRequest {
 	readonly includeCommitsMentionedByReflogs: boolean;
 	readonly showUncommittedChanges: boolean;
 	readonly showUntrackedFiles: boolean;
+	/** Mark commits that have git notes (#475). */
+	readonly showNotes?: boolean;
+	/** Configured issue-link rules (#313). */
+	readonly issueLinkSettings?: readonly IssueLinkSetting[];
+	/** Add GitHub / GitLab issue links from the remote's host. */
+	readonly issueLinkAutoDetect?: boolean;
 	/** Follow the single path in `filter.paths` across renames. */
 	readonly followRenames: boolean;
 }
@@ -112,7 +119,8 @@ const ANCESTRY_LIMIT = 50_000;
 export function existingBranches(selected: readonly string[], refs: RefsResult): string[] {
 	const known = new Set<string>([
 		...refs.heads.map((head) => `refs/heads/${head.name}`),
-		...refs.remoteHeads.map((remote) => `refs/remotes/${remote.name}`)
+		...refs.remoteHeads.map((remote) => `refs/remotes/${remote.name}`),
+		...refs.tags.map((tag) => `refs/tags/${tag.name}`)
 	]);
 	return selected.filter((ref) => known.has(ref));
 }
@@ -172,7 +180,11 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 			: Promise.resolve(null)
 	]);
 
-	const excludedRefs = await findExcludedRefs(git, repoPath, logRequest, refs);
+	const [excludedRefs, noted, remote] = await Promise.all([
+		findExcludedRefs(git, repoPath, logRequest, refs),
+		request.showNotes === true ? listNotedCommits(git, repoPath) : Promise.resolve(new Set<Hash>()),
+		readPrimaryRemote(git, repoPath, remotes)
+	]);
 
 	let commits = insertStashes(log.commits, stashes);
 	const changes = status !== null ? countStatusEntries(status) : 0;
@@ -198,8 +210,45 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 		remoteHeadSymrefs: refs.remoteHeadSymrefs,
 		moreAvailable: log.moreAvailable,
 		excludedRefs,
+		issueLinks: resolveIssueLinks(request.issueLinkSettings ?? [], request.issueLinkAutoDetect === true, remote),
+		notedCommits: commits.filter((commit) => noted.has(commit.hash)).map((commit) => commit.hash),
 		maxCommits: request.maxCommits
 	};
+}
+
+/**
+ * The remote whose web address issue links use: `origin` when there is one,
+ * otherwise the first remote. Null when there is none or it is not a hosted URL.
+ */
+async function readPrimaryRemote(git: GitExecutor, repo: string, remotes: readonly string[]): Promise<RemoteInfo | null> {
+	const name = remotes.includes('origin') ? 'origin' : remotes[0];
+	if (name === undefined) return null;
+	const url = await git.runOrNull(repo, ['remote', 'get-url', name]);
+	return url === null ? null : parseRemoteUrl(url);
+}
+
+/**
+ * Commits that have a note in the default notes ref (`core.notesRef`, else
+ * `refs/notes/commits`). `git notes list` prints `<note blob> <commit>` and
+ * fails when there are no notes at all, which is simply an empty set.
+ *
+ * Note text is not read here: notes are arbitrary blobs, and keeping them out
+ * of the NUL-delimited log output means no note can corrupt its parsing.
+ */
+export async function listNotedCommits(git: GitExecutor, repo: string): Promise<Set<Hash>> {
+	const output = await git.runOrNull(repo, ['notes', 'list']);
+	const noted = new Set<Hash>();
+	for (const line of (output ?? '').split('\n')) {
+		const commit = line.trim().split(' ')[1];
+		if (commit !== undefined && /^[0-9a-f]{40}$/.test(commit)) noted.add(commit);
+	}
+	return noted;
+}
+
+/** The note on a commit, or null when it has none. */
+export async function readNote(git: GitExecutor, repo: string, hash: Hash): Promise<string | null> {
+	const output = await git.runOrNull(repo, ['notes', 'show', hash]);
+	return output === null ? null : output.replace(/\n+$/, '');
 }
 
 /**

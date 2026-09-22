@@ -1,4 +1,4 @@
-import type { GraphData, PinnedBranch } from '../src/types.ts';
+import type { GraphData, Hash, PinnedBranch } from '../src/types.ts';
 
 /**
  * Matches a branch name against a pattern where `*` is any run of characters
@@ -49,4 +49,34 @@ export function resolvePins(data: GraphData, patterns: readonly string[]): Pinne
 		}
 	}
 	return pins;
+}
+
+/**
+ * Fixed branch colours (#254) as layout input: the palette extended with the
+ * configured colours, and the colour index for each matching branch tip.
+ * The first pattern to claim a tip wins, as with pins.
+ */
+export function resolveBranchColours(
+	data: GraphData,
+	palette: readonly string[],
+	rules: readonly (readonly [string, string])[]
+): { palette: string[]; laneColours: Map<Hash, number> } {
+	const extended = [...palette];
+	const laneColours = new Map<Hash, number>();
+	if (rules.length === 0) return { palette: extended, laneColours };
+
+	const excluded = new Set(data.excludedRefs);
+	const branches = [
+		...data.heads.filter((head) => !excluded.has(`refs/heads/${head.name}`)),
+		...data.remoteHeads.filter((remote) => !excluded.has(`refs/remotes/${remote.name}`))
+	];
+	for (const [pattern, colour] of rules) {
+		for (const branch of branches) {
+			if (laneColours.has(branch.hash) || !globMatches(pattern, branch.name)) continue;
+			let index = extended.indexOf(colour, palette.length);
+			if (index === -1) index = extended.push(colour) - 1;
+			laneColours.set(branch.hash, index);
+		}
+	}
+	return { palette: extended, laneColours };
 }

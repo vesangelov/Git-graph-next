@@ -94,6 +94,12 @@
         "title": "Open Git Graph in Editor",
         "category": "Git Graph Next",
         "icon": "$(link-external)"
+      },
+      {
+        "command": "gitGraphNext.toggleCompact",
+        "title": "Toggle Compact Graph",
+        "category": "Git Graph Next",
+        "icon": "$(fold)"
       }
     ],
     "menus": {
@@ -117,6 +123,10 @@
         {
           "command": "gitGraphNext.openFullGraph",
           "when": "false"
+        },
+        {
+          "command": "gitGraphNext.toggleCompact",
+          "when": "false"
         }
       ],
       "scm/title": [
@@ -139,6 +149,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "gitGraphNext.toggleCompact",
+          "when": "view == gitGraphNext.graphView",
+          "group": "navigation@0"
+        },
         {
           "command": "gitGraphNext.refresh",
           "when": "view == gitGraphNext.graphView",
@@ -286,6 +301,21 @@
           "markdownDescription": "Branches drawn as a straight line in a column of their own, leftmost first (e.g. `[\"main\", \"develop\"]`). Names may use `*` as a wildcard (`release/*`); remote branches are named with their remote (`origin/main`). Branches can also be pinned per repository from a branch label's context menu.",
           "scope": "resource"
         },
+        "git-graph-next.graph.branchColours": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Fixed colours for branches, e.g. `{ \"main\": \"#e5484d\", \"release/*\": \"#f5a524\" }`. The branch and its first-parent history keep that colour. Names may use `*`; remote branches are named with their remote (`origin/main`).",
+          "scope": "resource"
+        },
+        "git-graph-next.graph.colourCommitRows": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show each commit's branch colour as a stripe at the start of its row, next to the message.",
+          "scope": "window"
+        },
         "git-graph-next.graph.uncommittedChanges": {
           "type": "string",
           "enum": [
@@ -389,6 +419,41 @@
           "default": true,
           "description": "Include untracked files in the Uncommitted Changes row.",
           "scope": "window"
+        },
+        "git-graph-next.showNotes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Mark commits that have git notes, and show the note in the commit details.",
+          "scope": "resource"
+        },
+        "git-graph-next.issueLinking.autoDetect": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Link issue and merge request references for repositories hosted on GitHub (`#123`) and GitLab (`#123`, `!45`), detected from the `origin` remote.",
+          "scope": "resource"
+        },
+        "git-graph-next.issueLinking.rules": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern",
+              "url"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "A JavaScript regular expression matched in commit messages, e.g. \"([A-Z]+-\\\\d+)\"."
+              },
+              "url": {
+                "type": "string",
+                "description": "The link. $0 is the whole match, $1…$9 its groups; ${host}, ${owner}, ${repo} and ${repoUrl} come from the origin remote."
+              }
+            }
+          },
+          "markdownDescription": "Links for references in commit messages, e.g. `[{ \"pattern\": \"([A-Z]+-\\\\d+)\", \"url\": \"https://jira.example.com/browse/$1\" }]`. `$1`…`$9` are the match's groups; `${host}`, `${owner}`, `${repo}` and `${repoUrl}` are filled from the `origin` remote, so one rule can serve every repository.",
+          "scope": "resource"
         },
         "git-graph-next.referenceLabels.alignment": {
           "type": "string",

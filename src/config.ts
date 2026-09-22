@@ -3,6 +3,7 @@ import { completeFilter, type LoadOptions, type ViewConfig } from './view/protoc
 import type { GraphDataRequest } from './git/graphData.ts';
 import { emptyFilter } from './types.ts';
 import { validateArgs } from './git/extraArgs.ts';
+import type { IssueLinkSetting } from './git/remote.ts';
 
 export const SECTION = 'git-graph-next';
 
@@ -57,7 +58,9 @@ export function viewConfig(): ViewConfig {
 		loadMoreCommitsAutomatically: read('loadMoreCommitsAutomatically', true),
 		showRemoteBranches: read('showRemoteBranches', true),
 		showTags: read('showTags', true),
-		pinnedBranches: stringList('graph.pinnedBranches')
+		pinnedBranches: stringList('graph.pinnedBranches'),
+		branchColours: branchColours(),
+		colourRows: read('graph.colourCommitRows', false)
 	};
 }
 
@@ -83,6 +86,22 @@ export function showUntrackedFiles(): boolean {
 
 export function openToActiveEditorRepo(): boolean {
 	return read('openToTheRepoOfTheActiveTextEditorDocument', false);
+}
+
+/** `graph.branchColours` as ordered pairs; entries that are not strings are skipped. */
+function branchColours(): [string, string][] {
+	const value = section().get<unknown>('graph.branchColours');
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+	return Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim() !== '');
+}
+
+/** Configured issue-link rules; malformed entries are skipped. */
+function issueLinkSettings(): IssueLinkSetting[] {
+	const value = section().get<unknown>('issueLinking.rules');
+	if (!Array.isArray(value)) return [];
+	return value.filter(
+		(rule): rule is IssueLinkSetting => typeof rule === 'object' && rule !== null && typeof rule.pattern === 'string' && typeof rule.url === 'string'
+	);
 }
 
 /** A setting holding a list of strings; anything else in it is ignored. */
@@ -119,6 +138,9 @@ export function graphDataRequest(options: LoadOptions, followRenames: boolean): 
 		onlyFollowFirstParent: read('onlyFollowFirstParent', false),
 		includeCommitsMentionedByReflogs: read('includeCommitsMentionedByReflogs', false),
 		showUncommittedChanges: read('showUncommittedChanges', true),
-		showUntrackedFiles: read('showUntrackedFiles', true)
+		showUntrackedFiles: read('showUntrackedFiles', true),
+		showNotes: read('showNotes', true),
+		issueLinkSettings: issueLinkSettings(),
+		issueLinkAutoDetect: read('issueLinking.autoDetect', true)
 	};
 }

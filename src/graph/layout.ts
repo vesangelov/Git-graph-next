@@ -35,12 +35,20 @@ export interface LayoutOptions {
 	readonly colourCount: number;
 	/** Hash of the synthetic Uncommitted Changes row, whose edge is dashed. */
 	readonly uncommittedHash: Hash | null;
+	/**
+	 * Fixed colours for branch tips (#254): the lane starting at, or passing
+	 * through, one of these commits takes this colour index, and its first
+	 * parents inherit it. Indices may lie beyond `colourCount`; the rotation
+	 * for other lanes never hands them out.
+	 */
+	readonly laneColours: ReadonlyMap<Hash, number>;
 }
 
 const DEFAULT_OPTIONS: LayoutOptions = {
 	pinnedBranches: [],
 	colourCount: 12,
-	uncommittedHash: null
+	uncommittedHash: null,
+	laneColours: new Map()
 };
 
 /**
@@ -75,7 +83,7 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 	for (const branch of opts.pinnedBranches) {
 		if (pinnedColumns.has(branch.hash)) continue;
 		const column = lanes.length;
-		lanes.push({ expects: branch.hash, colour: takeColour(), pending: [], pinned: true });
+		lanes.push({ expects: branch.hash, colour: opts.laneColours.get(branch.hash) ?? takeColour(), pending: [], pinned: true });
 		pinnedColumns.set(branch.hash, column);
 	}
 
@@ -106,8 +114,11 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 		} else {
 			// A branch tip: nothing pointed here, so start a new lane.
 			column = firstFreeColumn();
-			colour = takeColour();
+			colour = opts.laneColours.get(commit.hash) ?? takeColour();
 		}
+		// A fixed-colour branch whose tip another lane reached first still
+		// takes its colour from here down.
+		colour = opts.laneColours.get(commit.hash) ?? colour;
 
 		for (const matchedColumn of matching) {
 			const lane = lanes[matchedColumn]!;
@@ -166,7 +177,7 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 			}
 
 			const parentColumn = pinnedColumns.get(parent) ?? firstFreeColumn();
-			const parentColour = takeColour();
+			const parentColour = opts.laneColours.get(parent) ?? takeColour();
 			const reserved = lanes[parentColumn];
 			lanes[parentColumn] = {
 				expects: parent,

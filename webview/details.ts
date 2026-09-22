@@ -1,6 +1,7 @@
 import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type Hash } from '../src/types.ts';
 import { formatDateLong, shortHash } from './format.ts';
-import { el, type RefLabel } from './render/table.ts';
+import { appendMessage, el, type RefLabel } from './render/table.ts';
+import type { IssueLinkRule } from '../src/git/remote.ts';
 
 /** Smallest height the pane can be dragged to, and the share of the view it may take at most. */
 const MIN_HEIGHT = 120;
@@ -12,6 +13,7 @@ export interface DetailsCallbacks {
 	onRevealCommit(hash: Hash): void;
 	onClose(): void;
 	onResize(height: number): void;
+	onOpenUrl(url: string): void;
 }
 
 const STATUS_NAMES: Record<FileChangeType, string> = {
@@ -38,6 +40,7 @@ export class DetailsPane {
 	private readonly files: HTMLElement;
 
 	private target: ChangeTarget | null = null;
+	private links: readonly IssueLinkRule[] = [];
 
 	constructor(private readonly callbacks: DetailsCallbacks) {
 		this.element = el('div', 'details');
@@ -60,6 +63,10 @@ export class DetailsPane {
 		content.append(this.meta, this.files);
 
 		this.element.append(handle, header, content);
+		this.meta.addEventListener('click', (event) => {
+			const url = (event.target as HTMLElement | null)?.closest<HTMLElement>('a.issue-link')?.dataset.url;
+			if (url !== undefined) this.callbacks.onOpenUrl(url);
+		});
 	}
 
 	get isOpen(): boolean {
@@ -75,13 +82,22 @@ export class DetailsPane {
 	}
 
 	/** Shows a commit; its files arrive later through `showChanges`. */
-	open(repo: string, commit: Commit, labels: readonly RefLabel[]): void {
+	open(repo: string, commit: Commit, labels: readonly RefLabel[], links: readonly IssueLinkRule[] = []): void {
+		this.links = links;
 		this.target = changeTarget(repo, commit);
 		this.element.hidden = false;
 		this.title.textContent = commit.hash === UNCOMMITTED ? commit.subject : `${shortHash(commit.hash)}  ${commit.subject}`;
 		this.title.title = this.title.textContent;
 		this.renderMeta(commit, labels);
 		this.files.replaceChildren(el('div', 'details-note', 'Loading changed files…'));
+	}
+
+	/** Adds a commit's git note (#475) under its message. */
+	showNote(hash: Hash, note: string): void {
+		if (this.target?.hash !== hash) return;
+		const block = el('div', 'details-notes');
+		block.append(el('div', 'details-notes-title', 'Notes'), el('div', 'details-message selectable', note));
+		this.meta.appendChild(block);
 	}
 
 	close(): void {
@@ -143,10 +159,12 @@ export class DetailsPane {
 			}
 			if (commit.committerDate !== commit.authorDate) rows.push(['Committed', formatDateLong(commit.committerDate)]);
 		}
-		if (labels.length > 0) rows.push(['Refs', labels.map((l) => l.name).join(', ')]);
+		const refs = labels.filter((l) => l.kind !== 'note');
+		if (refs.length > 0) rows.push(['Refs', refs.map((l) => l.name).join(', ')]);
 		if (commit.parents.length > 1) rows.push(['Diff', 'Changes are shown against the first parent.']);
 
-		const message = el('div', 'details-message selectable', commit.body === '' ? commit.subject : `${commit.subject}\n\n${commit.body}`);
+		const message = el('div', 'details-message selectable');
+		appendMessage(message, commit.body === '' ? commit.subject : `${commit.subject}\n\n${commit.body}`, [], this.links);
 		this.meta.replaceChildren(this.table(rows), message);
 	}
 

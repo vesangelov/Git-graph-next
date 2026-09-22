@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GitExecutor } from '../src/git/executor.ts';
-import { countStatusEntries, insertStashes, loadGraphData, type GraphDataRequest } from '../src/git/graphData.ts';
+import { countStatusEntries, insertStashes, loadGraphData, readNote, type GraphDataRequest } from '../src/git/graphData.ts';
 import { dedupePaths, discoverRepositories, scanForNestedRepositories } from '../src/git/repository.ts';
 import { UNCOMMITTED, emptyFilter, type Commit, type Stash } from '../src/types.ts';
 
@@ -268,4 +268,23 @@ test('extra log arguments that drop commits leave a connected graph', async () =
 	assert.ok(!data.commits.some((c) => c.subject === 'merge'));
 	assert.equal(data.commits.length, 7);
 	assertConnected(data.commits);
+});
+
+test('lists commits with git notes and reads a note', async () => {
+	const repo = initRepo(join(root, 'notes'));
+	commitFile(repo, 'a.txt', '1\n', 'plain');
+	commitFile(repo, 'a.txt', '2\n', 'annotated');
+	fixture(repo, 'notes', 'add', '-m', 'Reviewed-by: QA\n\nSecond paragraph', 'HEAD');
+
+	const data = await loadGraphData(git, repo, { ...request, showNotes: true });
+	const annotated = data.commits.find((c) => c.subject === 'annotated')!;
+	assert.deepEqual(data.notedCommits, [annotated.hash]);
+	assert.equal(await readNote(git, repo, annotated.hash), 'Reviewed-by: QA\n\nSecond paragraph');
+	assert.equal(await readNote(git, repo, data.commits.find((c) => c.subject === 'plain')!.hash), null);
+
+	const withoutNotes = await loadGraphData(git, repo, request);
+	assert.deepEqual(withoutNotes.notedCommits, [], 'not looked up when the setting is off');
+	const empty = initRepo(join(root, 'no-notes'));
+	commitFile(empty, 'a.txt', '1\n', 'x');
+	assert.deepEqual((await loadGraphData(git, empty, { ...request, showNotes: true })).notedCommits, [], 'a repository without notes is fine');
 });

@@ -2,7 +2,8 @@ import { layoutGraph } from '../src/graph/layout.ts';
 import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GraphData, type Hash } from '../src/types.ts';
 import { NO_FILTER, completeFilter, isFiltered, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
 import { FilterControls } from './filters.ts';
-import { escapeGlob, globMatches, resolvePins } from './pins.ts';
+import { collapseRuns, runContaining } from '../src/graph/collapse.ts';
+import { escapeGlob, globMatches, resolveBranchColours, resolvePins } from './pins.ts';
 import { SearchBar, type SearchStatus } from './search.ts';
 import { highlightTerms, matchesQuery, parseQuery, type SearchQuery, type SearchRef } from '../src/search/query.ts';
 import { DetailsPane, changeTarget } from './details.ts';
@@ -44,7 +45,13 @@ const state = {
 	/** Branch names pinned from the context menu, per repository (#207). */
 	pins: {} as Record<string, readonly string[]>,
 	/** Author names seen per repository, offered as filter suggestions. */
-	authors: new Map<string, Set<string>>()
+	authors: new Map<string, Set<string>>(),
+	/** Fold plain linear history into single rows (#387). */
+	compact: false,
+	/** Collapsed runs the user expanded, by first hash. Cleared on reload of another repo. */
+	expanded: new Set<Hash>(),
+	/** Runs folded in the rows on screen, by stand-in hash. */
+	runs: new Map<Hash, readonly Commit[]>() as ReadonlyMap<Hash, readonly Commit[]>
 };
 
 const saved = vscode.getState();
@@ -57,6 +64,7 @@ if (saved !== undefined) {
 		for (const [repo, filter] of Object.entries(saved.filters ?? {})) state.filters[repo] = completeFilter(filter);
 	}
 	state.pins = { ...saved.pins };
+	state.compact = saved.compact === true;
 }
 
 function currentFilter(): FilterState {
@@ -77,7 +85,8 @@ function persist(): void {
 			showRemoteBranches: state.showRemoteBranches,
 			detailsHeight: state.detailsHeight,
 			filters: state.filters,
-			pins: state.pins
+			pins: state.pins,
+			compact: state.compact
 		});
 	}, 200);
 }
@@ -114,10 +123,14 @@ const filters = new FilterControls({
 	}
 });
 
+const compactButton = el('button', 'icon-button filter-toggle', 'Compact');
+compactButton.title = 'Fold long runs of linear history into single rows, to see the branch structure';
+compactButton.addEventListener('click', () => toggleCompact());
+
 const searchButton = el('button', 'icon-button filter-toggle', 'Search');
 searchButton.title = 'Search commits (Ctrl+F)';
 
-toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, searchButton, filters.toggleButton, refreshButton);
+toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, compactButton, searchButton, filters.toggleButton, refreshButton);
 
 /** Search state (#147). Matches are hashes in row order; `index` points at the current one. */
 const search = {
@@ -159,6 +172,11 @@ const table = new CommitTable({
 	onNearEnd: () => {
 		if (state.config?.loadMoreCommitsAutomatically === true) loadMore();
 	},
+	onOpenUrl: (url) => post({ type: 'openUrl', url }),
+	onExpand: (hash) => {
+		state.expanded.add(hash);
+		drawGraph();
+	},
 	onScroll: () => {
 		menu.close();
 		persist();
@@ -168,12 +186,13 @@ const table = new CommitTable({
 const details = new DetailsPane({
 	onOpenDiff: (target, change) => post({ type: 'openDiff', target, change }),
 	onFileContextMenu: (event, target, change) => menu.open(event.clientX, event.clientY, fileMenuItems(target, change)),
-	onRevealCommit: (hash) => table.reveal(hash),
+	onRevealCommit: (hash) => revealCommit(hash),
 	onClose: () => details.close(),
 	onResize: (height) => {
 		state.detailsHeight = height;
 		persist();
-	}
+	},
+	onOpenUrl: (url) => post({ type: 'openUrl', url })
 });
 if (state.detailsHeight !== null) details.setHeight(state.detailsHeight);
 
@@ -188,6 +207,7 @@ if (mode === 'sidebar') {
 	filters.toggleButton.hidden = true;
 	filters.bar.hidden = true;
 	searchButton.hidden = true;
+	compactButton.hidden = true;
 }
 app.append(toolbar, filters.bar, searchBar.element, message, table.element, details.element, menu.element, filters.popupElement);
 if (mode === 'panel') filters.set(currentFilter());
@@ -268,6 +288,7 @@ function openSearch(): void {
 function searchRefs(labels: readonly RefLabel[]): SearchRef[] {
 	const refs: SearchRef[] = [];
 	for (const label of labels) {
+		if (label.kind === 'note') continue;
 		refs.push({ name: label.name, kind: label.kind === 'head' ? 'branch' : label.kind });
 		// Remote branches folded into a local label are still searchable by their own name.
 		for (const remote of label.remotes) refs.push({ name: `${remote}/${label.name}`, kind: 'remote' });
@@ -287,6 +308,7 @@ function runSearch(keepCurrent: boolean): void {
 	if (search.query === null || data === null || config === null) {
 		search.matches = [];
 		search.index = -1;
+		if (state.compact) drawGraph();
 		table.setSearch(null);
 		updateSearchStatus();
 		return;
@@ -308,6 +330,8 @@ function runSearch(keepCurrent: boolean): void {
 	}
 	if (index === -1 && search.matches.length > 0) index = 0;
 	search.index = index;
+	// Matches are kept out of folded runs, so the folding depends on them.
+	if (state.compact) drawGraph();
 	showMatch(!keepCurrent);
 }
 
@@ -385,13 +409,17 @@ function selectCommit(commit: Commit, toggle: boolean): void {
 	}
 	const repo = state.repo;
 	if (mode === 'panel') {
-		details.open(repo, commit, labelsFor(commit));
+		details.open(repo, commit, labelsFor(commit), state.data?.issueLinks ?? []);
 	}
 	clearTimeout(selectTimer);
 	selectTimer = window.setTimeout(() => {
 		const title = commit.hash === UNCOMMITTED ? commit.subject : `${shortHash(commit.hash)} ${commit.subject}`;
-		post({ type: 'selectCommit', target: changeTarget(repo, commit), title });
+		post({ type: 'selectCommit', target: changeTarget(repo, commit), title, hasNote: hasNote(commit.hash) });
 	}, SELECT_DEBOUNCE_MS);
+}
+
+function hasNote(hash: Hash): boolean {
+	return state.data?.notedCommits.includes(hash) === true;
 }
 
 function labelsFor(commit: Commit): RefLabel[] {
@@ -411,11 +439,20 @@ function fileMenuItems(target: ChangeTarget, change: FileChange): MenuItem[] {
 }
 
 function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
+	const run = state.runs.get(commit.hash);
+	if (run !== undefined) {
+		return [
+			{ label: `Expand ${run.length} Commits`, action: () => { state.expanded.add(commit.hash); drawGraph(); } },
+			{ label: 'Show Full History (Leave Compact Mode)', action: () => toggleCompact() }
+		];
+	}
 	const copy = (text: string, what: string) => () => post({ type: 'copyToClipboard', text, label: what });
 	const items: MenuItem[] = [];
 	if (label !== null) {
-		const what = { head: 'Branch Name', remote: 'Branch Name', tag: 'Tag Name', stash: 'Stash Name' }[label.kind];
-		items.push({ label: `Copy ${what}`, action: copy(label.name, what.toLowerCase()) }, { separator: true });
+		if (label.kind !== 'note') {
+			const what = { head: 'Branch Name', remote: 'Branch Name', tag: 'Tag Name', stash: 'Stash Name' }[label.kind];
+			items.push({ label: `Copy ${what}`, action: copy(label.name, what.toLowerCase()) }, { separator: true });
+		}
 	}
 	if (label !== null && (label.kind === 'head' || label.kind === 'remote')) {
 		const ref = label.kind === 'head' ? `refs/heads/${label.name}` : `refs/remotes/${label.name}`;
@@ -424,7 +461,10 @@ function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 		if (currentPins().includes(label.name)) items.push({ label: 'Unpin from Own Column', action: () => setPins(currentPins().filter((n) => n !== label.name)) });
 		else if (!pinnedBySetting) items.push({ label: 'Pin to Own Column', action: () => setPins([...currentPins(), label.name]) });
 	}
-	if (mode === 'panel' && label !== null && label.kind !== 'stash' && !label.current) {
+	if (mode === 'panel' && label !== null && label.kind === 'tag') {
+		items.push({ label: 'Show Only This Tag', action: () => filters.update({ branches: [`refs/tags/${label.name}`] }) });
+	}
+	if (mode === 'panel' && label !== null && (label.kind === 'head' || label.kind === 'remote' || label.kind === 'tag') && !label.current) {
 		const what = label.kind === 'tag' ? 'Tag' : 'Branch';
 		items.push({ label: `Hide This ${what}`, action: () => filters.update({ excludes: [...currentFilter().excludes, escapeGlob(label.name)] }) });
 	}
@@ -503,12 +543,8 @@ function render(): void {
 function showGraph(data: GraphData): void {
 	const config = state.config;
 	if (config === null) return;
-	const layout = layoutGraph(data.commits, {
-		colourCount: config.colours.length,
-		uncommittedHash: UNCOMMITTED,
-		pinnedBranches: resolvePins(data, [...config.pinnedBranches, ...currentPins()])
-	});
 	const switchedRepo = state.data?.repo.path !== data.repo.path;
+	if (switchedRepo) state.expanded.clear();
 	state.data = data;
 	if (mode === 'panel') {
 		let known = state.authors.get(data.repo.path);
@@ -518,7 +554,7 @@ function showGraph(data: GraphData): void {
 	}
 	// Unhide before measuring: a hidden element has no size and ignores scrollTop.
 	table.element.hidden = data.commits.length === 0;
-	table.setData(data, layout, config);
+	drawGraph();
 	syncDetails(data);
 	if (search.query !== null) runSearch(true);
 	if (state.restoreScrollTop !== null) {
@@ -527,6 +563,57 @@ function showGraph(data: GraphData): void {
 	} else if (switchedRepo) {
 		table.scrollTop = 0;
 	}
+}
+
+/**
+ * Lays out and draws the loaded data: folded into compact form when that mode
+ * is on, with pinned columns (#207) and fixed branch colours (#254).
+ */
+function drawGraph(): void {
+	const data = state.data;
+	const config = state.config;
+	if (data === null || config === null) return;
+
+	let shown = data;
+	state.runs = new Map();
+	if (state.compact) {
+		// Everything that gives the graph its shape, or that the user is
+		// looking at, stays a row of its own.
+		const keep = new Set<Hash>([...buildLabels(data, config).keys(), ...search.matches]);
+		if (data.repo.headHash !== null) keep.add(data.repo.headHash);
+		for (const hash of [details.currentHash, table.selectedHash]) if (hash !== null) keep.add(hash);
+		const view = collapseRuns(data.commits, keep, state.expanded);
+		shown = { ...data, commits: view.commits };
+		state.runs = view.runs;
+	}
+
+	const { palette, laneColours } = resolveBranchColours(shown, config.colours, config.branchColours);
+	const layout = layoutGraph(shown.commits, {
+		colourCount: config.colours.length,
+		uncommittedHash: UNCOMMITTED,
+		pinnedBranches: resolvePins(shown, [...config.pinnedBranches, ...currentPins()]),
+		laneColours
+	});
+	table.setData(shown, layout, { ...config, colours: palette }, state.runs);
+	compactButton.classList.toggle('active', state.compact);
+}
+
+function toggleCompact(): void {
+	state.compact = !state.compact;
+	state.expanded.clear();
+	persist();
+	drawGraph();
+	if (search.query !== null) showMatch(false);
+}
+
+/** Scrolls to a commit, first expanding the collapsed run it is folded into. */
+function revealCommit(hash: Hash): void {
+	if (table.reveal(hash)) return;
+	const run = runContaining(state.runs, hash);
+	if (run === null) return;
+	state.expanded.add(run);
+	drawGraph();
+	table.reveal(hash);
 }
 
 /**
@@ -542,7 +629,7 @@ function syncDetails(data: GraphData): void {
 		details.close();
 	} else if (hash === UNCOMMITTED) {
 		details.open(data.repo.path, commit, []);
-		post({ type: 'selectCommit', target: changeTarget(data.repo.path, commit), title: commit.subject });
+		post({ type: 'selectCommit', target: changeTarget(data.repo.path, commit), title: commit.subject, hasNote: false });
 	}
 }
 
@@ -570,6 +657,9 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 			if (state.repo !== null && (switched || (state.data === null && !state.loading))) reload();
 			break;
 		}
+		case 'toggleCompact':
+			toggleCompact();
+			return;
 		case 'setFilter': {
 			if (mode !== 'panel') return;
 			if (msg.repo !== state.repo) {
@@ -610,7 +700,9 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 			return;
 		}
 		case 'changes':
-			if (msg.repo === state.repo) details.showChanges(msg.hash, msg.changes, msg.error);
+			if (msg.repo !== state.repo) return;
+			details.showChanges(msg.hash, msg.changes, msg.error);
+			if (msg.note !== null) details.showNote(msg.hash, msg.note);
 			return;
 		case 'error':
 			if (msg.repo !== null && msg.repo !== state.repo) return;

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { basename, join } from 'node:path';
 import type { GitExecutor } from '../git/executor.ts';
-import { readFileAtRevision } from '../git/changes.ts';
+import { emptySideContent, readBlobAtRevision } from '../git/changes.ts';
 import { FileChangeType, UNCOMMITTED, type ChangeTarget, type FileChange } from '../types.ts';
 
 /** URI scheme for read-only file contents at a revision. */
@@ -24,19 +24,67 @@ export function revisionUri(repo: string, revision: string, path: string): vscod
 	return vscode.Uri.from({ scheme: REVISION_SCHEME, path: `/${path}`, query: JSON.stringify(query) });
 }
 
-/** Serves `git-graph-next:` URIs by reading the blob from git. Contents never change, so no change events. */
-export class RevisionContentProvider implements vscode.TextDocumentContentProvider {
+/** Blobs are immutable, so a few recent reads can be served again without git. */
+const BLOB_CACHE_SIZE = 20;
+
+/**
+ * Serves `git-graph-next:` URIs as a read-only file system.
+ *
+ * A file system rather than a text content provider, because VS Code opens
+ * notebooks (#598), images and other custom editors only from a file system:
+ * with plain text content, a `.ipynb` diff shows raw JSON. It also hands over
+ * bytes, so nothing is lost to a text decoding.
+ */
+export class RevisionFileSystem implements vscode.FileSystemProvider {
+	private readonly cache = new Map<string, Uint8Array>();
+	private readonly changed = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
+	/** Never fires: a file at a revision cannot change. */
+	readonly onDidChangeFile = this.changed.event;
+
 	constructor(private readonly git: GitExecutor) {}
 
-	async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+	async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
+		const content = await this.readFile(uri);
+		return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: content.byteLength, permissions: vscode.FilePermission.Readonly };
+	}
+
+	async readFile(uri: vscode.Uri): Promise<Uint8Array> {
+		const cached = this.cache.get(uri.toString());
+		if (cached !== undefined) return cached;
+
 		let query: RevisionQuery;
 		try {
 			query = JSON.parse(uri.query) as RevisionQuery;
 		} catch {
-			return '';
+			throw vscode.FileSystemError.FileNotFound(uri);
 		}
-		if (query.revision === '') return '';
-		return readFileAtRevision(this.git, query.repo, query.revision, query.path);
+		const blob = query.revision === '' ? null : await readBlobAtRevision(this.git, query.repo, query.revision, query.path);
+		// A side that does not exist is shown empty, as the other half of an add or delete.
+		const content = blob ?? Buffer.from(emptySideContent(query.path), 'utf8');
+
+		this.cache.set(uri.toString(), content);
+		if (this.cache.size > BLOB_CACHE_SIZE) this.cache.delete(this.cache.keys().next().value!);
+		return content;
+	}
+
+	watch(): vscode.Disposable {
+		return new vscode.Disposable(() => undefined);
+	}
+
+	readDirectory(): never {
+		throw vscode.FileSystemError.NoPermissions('Revisions are read-only');
+	}
+	createDirectory(): never {
+		throw vscode.FileSystemError.NoPermissions('Revisions are read-only');
+	}
+	writeFile(): never {
+		throw vscode.FileSystemError.NoPermissions('Revisions are read-only');
+	}
+	delete(): never {
+		throw vscode.FileSystemError.NoPermissions('Revisions are read-only');
+	}
+	rename(): never {
+		throw vscode.FileSystemError.NoPermissions('Revisions are read-only');
 	}
 }
 

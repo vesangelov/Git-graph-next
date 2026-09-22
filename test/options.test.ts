@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { joinArgs, rejectArg, splitArgs, validateArgs } from '../src/git/extraArgs.ts';
 import { buildLogArgs, refGlobArgs } from '../src/git/log.ts';
-import { globMatches, resolvePins } from '../webview/pins.ts';
+import { globMatches, resolveBranchColours, resolvePins } from '../webview/pins.ts';
 import { layoutGraph } from '../src/graph/layout.ts';
 import { RefType, emptyFilter, type Commit, type GraphData } from '../src/types.ts';
 
@@ -78,6 +78,8 @@ function data(commits: Commit[], heads: [string, string][], remotes: [string, st
 		remoteHeadSymrefs: {},
 		moreAvailable: false,
 		excludedRefs,
+		notedCommits: [],
+		issueLinks: [],
 		maxCommits: 100
 	};
 }
@@ -103,4 +105,29 @@ test('a pinned branch keeps one straight column while others weave around it', (
 	const pinned = layoutGraph(commits, { pinnedBranches: [{ hash: 'd3', name: 'develop' }] }).vertices.map((v) => v.column);
 	assert.deepEqual(pinned.filter((_, i) => commits[i].hash.startsWith('d')), [0, 0, 0], 'every develop commit in column 0');
 	assert.ok(unpinned.length === pinned.length);
+});
+
+test('a fixed branch colour follows its first-parent history, and the rotation never hands it out', () => {
+	// main: m3 → m2 → m1, with a feature branch f1 off m1 shown in between.
+	const commits = [commit('m3', 'm2'), commit('f1', 'm1'), commit('m2', 'm1'), commit('m1')];
+	const layout = layoutGraph(commits, { colourCount: 3, laneColours: new Map([['m3', 7]]) });
+	const colourOf = (hash: string) => layout.vertices.find((v) => v.hash === hash)!.colour;
+	assert.deepEqual(['m3', 'm2', 'm1'].map(colourOf), [7, 7, 7]);
+	assert.ok(colourOf('f1') < 3, 'other lanes keep using the base palette');
+});
+
+test('a fixed colour applies even when another lane reaches the tip first', () => {
+	// f2's first parent is main's tip m1: the lane arrives from above.
+	const commits = [commit('f2', 'm1'), commit('m1', 'm0'), commit('m0')];
+	const layout = layoutGraph(commits, { colourCount: 3, laneColours: new Map([['m1', 5]]) });
+	assert.deepEqual(layout.vertices.map((v) => v.colour).slice(1), [5, 5]);
+});
+
+test('resolves branch colours into an extended palette', () => {
+	const d = data([commit('b'), commit('a')], [['main', 'a'], ['release/1', 'b'], ['release/2', 'b']], [['origin/main', 'a']]);
+	const { palette, laneColours } = resolveBranchColours(d, ['#111', '#222'], [['release/*', '#f90'], ['main', '#e00'], ['origin/*', '#e00']]);
+	assert.deepEqual(palette, ['#111', '#222', '#f90', '#e00'], 'each distinct colour is added once');
+	assert.equal(laneColours.get('b'), 2);
+	assert.equal(laneColours.get('a'), 3);
+	assert.deepEqual(resolveBranchColours(d, ['#111'], []).palette, ['#111']);
 });

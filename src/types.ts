@@ -240,6 +240,10 @@ export interface GraphData {
 	readonly remoteHeadSymrefs: Readonly<Record<string, string>>;
 	/** True when `git log` had more commits than were requested. */
 	readonly moreAvailable: boolean;
+	/** Issue-link rules for this repository (#313), `$n` still to be filled per match. */
+	readonly issueLinks: readonly { readonly pattern: string; readonly url: string }[];
+	/** Loaded commits that have a git note (#475). */
+	readonly notedCommits: readonly Hash[];
 	/** Full names of refs hidden by exclude patterns (#360); their labels are not drawn. */
 	readonly excludedRefs: readonly string[];
 	/** The `maxCommits` this data was loaded with, echoed for Load More. */

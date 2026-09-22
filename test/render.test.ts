@@ -57,6 +57,8 @@ function data(): GraphData {
 		remoteHeadSymrefs: { origin: 'origin/main' },
 		moreAvailable: false,
 		excludedRefs: [],
+		notedCommits: [],
+		issueLinks: [],
 		maxCommits: 100
 	};
 }

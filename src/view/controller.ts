@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GitExecutor } from '../git/executor.ts';
-import { loadGraphData } from '../git/graphData.ts';
+import { loadGraphData, readNote } from '../git/graphData.ts';
 import { searchHistory } from '../git/search.ts';
 import { parseQuery } from '../search/query.ts';
 import type { RepoManager } from '../repoManager.ts';
@@ -127,6 +127,11 @@ export class GraphController implements vscode.Disposable {
 		}
 	}
 
+	/** Switches the view's compact mode (#387). */
+	toggleCompact(): void {
+		this.post({ type: 'toggleCompact' });
+	}
+
 	reload(): void {
 		if (this.lastLoad === null) return;
 		if (!this.host.visible) {
@@ -185,12 +190,13 @@ export class GraphController implements vscode.Disposable {
 				break;
 			case 'selectCommit': {
 				const { target } = message;
+				const note = message.hasNote ? readNote(this.services.git, target.repo, target.hash) : Promise.resolve(null);
 				try {
 					const changes = await this.services.changes.select(target, message.title);
-					this.post({ type: 'changes', repo: target.repo, hash: target.hash, changes, error: null });
+					this.post({ type: 'changes', repo: target.repo, hash: target.hash, changes, error: null, note: await note });
 				} catch (error) {
 					const text = error instanceof Error ? error.message : String(error);
-					this.post({ type: 'changes', repo: target.repo, hash: target.hash, changes: null, error: text });
+					this.post({ type: 'changes', repo: target.repo, hash: target.hash, changes: null, error: text, note: await note });
 				}
 				break;
 			}
@@ -209,6 +215,12 @@ export class GraphController implements vscode.Disposable {
 				} catch (error) {
 					this.post({ type: 'searchResult', requestId, match: null, error: error instanceof Error ? error.message : String(error) });
 				}
+				break;
+			}
+			case 'openUrl': {
+				// The webview only makes http(s) links, but it is not trusted to.
+				const uri = vscode.Uri.parse(message.url, true);
+				if (uri.scheme === 'http' || uri.scheme === 'https') await vscode.env.openExternal(uri);
 				break;
 			}
 			case 'openDiff':

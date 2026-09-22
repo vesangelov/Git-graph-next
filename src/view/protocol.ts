@@ -28,6 +28,10 @@ export interface ViewConfig {
 	readonly showTags: boolean;
 	/** Branch name patterns drawn in a column of their own, in priority order (#207). */
 	readonly pinnedBranches: readonly string[];
+	/** Fixed colours for branches, as [pattern, CSS colour] in priority order (#254). */
+	readonly branchColours: readonly (readonly [string, string])[];
+	/** Tint each commit row with its branch colour (#254). */
+	readonly colourRows: boolean;
 }
 
 export interface RepoOption {
@@ -46,6 +50,8 @@ export type HostMessage =
 	  }
 	| { readonly type: 'loading'; readonly repo: string }
 	| { readonly type: 'graph'; readonly data: GraphData }
+	/** Switches compact mode (#387), from the sidebar's title bar. */
+	| { readonly type: 'toggleCompact' }
 	/** Replaces parts of a repository's filter, e.g. from "View File History". Switches to that repository. */
 	| { readonly type: 'setFilter'; readonly repo: string; readonly filter: Partial<FilterState> }
 	| { readonly type: 'error'; readonly repo: string | null; readonly message: string }
@@ -62,6 +68,8 @@ export type HostMessage =
 			readonly hash: Hash;
 			readonly changes: readonly FileChange[] | null;
 			readonly error: string | null;
+			/** The commit's git note (#475), when it has one. */
+			readonly note: string | null;
 	  };
 
 /** The filters chosen in the view's filter bar, kept per repository. */
@@ -108,7 +116,7 @@ export type WebviewMessage =
 	| { readonly type: 'load'; readonly options: LoadOptions }
 	| { readonly type: 'copyToClipboard'; readonly text: string; readonly label: string }
 	/** The user selected a row; the host loads its changed files. */
-	| { readonly type: 'selectCommit'; readonly target: ChangeTarget; readonly title: string }
+	| { readonly type: 'selectCommit'; readonly target: ChangeTarget; readonly title: string; readonly hasNote: boolean }
 	| { readonly type: 'openDiff'; readonly target: ChangeTarget; readonly change: FileChange }
 	/**
 	 * Searches history beyond the loaded commits for the first match at or
@@ -116,6 +124,8 @@ export type WebviewMessage =
 	 * options the graph was loaded with.
 	 */
 	| { readonly type: 'searchHistory'; readonly requestId: number; readonly options: LoadOptions; readonly query: string; readonly fromPosition: number }
+	/** Opens an issue link (#313) in the browser. The host accepts http(s) only. */
+	| { readonly type: 'openUrl'; readonly url: string }
 	/** Opens the working-tree version of a repo-relative path. */
 	| { readonly type: 'openFile'; readonly repo: string; readonly path: string };
 
@@ -130,4 +140,6 @@ export interface PersistedViewState {
 	readonly filters?: Readonly<Record<string, Partial<FilterState>>>;
 	/** Branches pinned from the context menu, per repository path (#207). */
 	readonly pins?: Readonly<Record<string, readonly string[]>>;
+	/** Compact mode (#387). */
+	readonly compact?: boolean;
 }

@@ -1,6 +1,7 @@
 import { UNCOMMITTED, type Commit, type GraphData, type GraphLayout, type Hash } from '../../src/types.ts';
 import type { ViewConfig } from '../../src/view/protocol.ts';
 import { formatDate, formatDateLong, shortHash } from '../format.ts';
+import { linkify, type IssueLinkRule } from '../../src/git/remote.ts';
 import { DEFAULT_GEOMETRY, graphPixelWidth, renderGraph, type GraphGeometry } from './graph.ts';
 
 /** Rows rendered above and below the viewport, so fast scrolling shows no gaps. */
@@ -10,7 +11,7 @@ const MIN_GRAPH_WIDTH = 64;
 /** Rows from the bottom at which more commits are requested. */
 const LOAD_MORE_THRESHOLD = 10;
 
-export type LabelKind = 'head' | 'remote' | 'tag' | 'stash';
+export type LabelKind = 'head' | 'remote' | 'tag' | 'stash' | 'note';
 
 export interface RefLabel {
 	readonly kind: LabelKind;
@@ -85,7 +86,12 @@ export function buildLabels(data: GraphData, config: Pick<ViewConfig, 'combineLo
 		}
 	}
 
-	const rank = (label: RefLabel) => (label.current ? 0 : { head: 1, remote: 2, tag: 3, stash: 4 }[label.kind]);
+	// A badge for commits with a git note (#475); the note itself is in the details.
+	for (const hash of data.notedCommits) {
+		add(hash, { kind: 'note', name: 'note', remotes: [], current: false, title: 'This commit has a git note — open the commit to read it' });
+	}
+
+	const rank = (label: RefLabel) => (label.current ? 0 : { head: 1, remote: 2, tag: 3, stash: 4, note: 5 }[label.kind]);
 	for (const list of labels.values()) list.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 	return labels;
 }
@@ -95,6 +101,9 @@ export interface TableCallbacks {
 	onSelect(commit: Commit, toggle: boolean): void;
 	onContextMenu(event: MouseEvent, commit: Commit, label: RefLabel | null): void;
 	onNearEnd(): void;
+	onOpenUrl(url: string): void;
+	/** A collapsed run's row was clicked (#387). */
+	onExpand(hash: Hash): void;
 	onScroll(scrollTop: number): void;
 }
 
@@ -105,6 +114,8 @@ interface TableModel {
 	readonly labels: Map<Hash, RefLabel[]>;
 	readonly stashHashes: Set<Hash>;
 	readonly colourOf: (row: number) => string;
+	/** Collapsed runs by stand-in hash (#387). */
+	readonly collapsed: ReadonlyMap<Hash, readonly Commit[]>;
 }
 
 /**
@@ -205,7 +216,7 @@ export class CommitTable {
 		return true;
 	}
 
-	setData(data: GraphData, layout: GraphLayout, config: ViewConfig): void {
+	setData(data: GraphData, layout: GraphLayout, config: ViewConfig, collapsed: ReadonlyMap<Hash, readonly Commit[]> = new Map()): void {
 		this.geometry = { ...DEFAULT_GEOMETRY, style: config.graphStyle };
 		const colours = config.colours.length > 0 ? config.colours : ['#888'];
 		this.model = {
@@ -214,7 +225,8 @@ export class CommitTable {
 			config,
 			labels: buildLabels(data, config),
 			stashHashes: new Set(data.commits.filter((c) => c.stash !== null).map((c) => c.hash)),
-			colourOf: (row) => colours[layout.vertices[row].colour % colours.length]
+			colourOf: (row) => colours[layout.vertices[row].colour % colours.length],
+			collapsed
 		};
 		if (this.selected !== null && !data.commits.some((c) => c.hash === this.selected)) this.selected = null;
 
@@ -285,14 +297,41 @@ export class CommitTable {
 			last: range.last,
 			headHash: model.data.repo.headHash,
 			uncommittedHash: UNCOMMITTED,
-			stashHashes: model.stashHashes
+			stashHashes: model.stashHashes,
+			collapsedHashes: model.collapsed
 		});
 
 		if (range.last >= rowCount - LOAD_MORE_THRESHOLD) this.callbacks.onNearEnd();
 	}
 
+	/** The stand-in row for a collapsed run (#387): count, date range and authors. */
+	private renderCollapsedRow(model: TableModel, row: number, run: readonly Commit[]): HTMLElement {
+		const element = el('div', 'row commit collapsed');
+		element.dataset.row = String(row);
+		element.appendChild(el('div', 'cell graph'));
+		const desc = el('div', 'cell desc');
+		desc.append(el('span', 'subject', `⋯ ${run.length} commits`), el('span', 'collapsed-hint', 'click to expand'));
+		element.appendChild(desc);
+
+		const dateOf = (c: Commit) => (model.config.dateType === 'Commit Date' ? c.committerDate : c.authorDate);
+		const newest = formatDate(dateOf(run[0]), model.config.dateFormat);
+		const oldest = formatDate(dateOf(run[run.length - 1]), model.config.dateFormat);
+		const date = el('div', 'cell date', oldest === newest ? newest : `${oldest} – ${newest}`);
+		date.title = date.textContent ?? '';
+		element.appendChild(date);
+
+		const authors = [...new Set(run.map((c) => c.author))];
+		const author = el('div', 'cell author', authors.length === 1 ? authors[0] : `${authors.length} authors`);
+		author.title = authors.join('\n');
+		element.append(author, el('div', 'cell hash', `${shortHash(run[run.length - 1].hash).slice(0, 7)}…`));
+		element.title = `${run.length} commits of linear history, from ${shortHash(run[run.length - 1].hash)} to ${shortHash(run[0].hash)}. Click to expand.`;
+		return element;
+	}
+
 	private renderRow(model: TableModel, row: number): HTMLElement {
 		const commit = model.data.commits[row];
+		const run = model.collapsed.get(commit.hash);
+		if (run !== undefined) return this.renderCollapsedRow(model, row, run);
 		const element = el('div', 'row commit');
 		element.dataset.row = String(row);
 		if (commit.hash === this.selected) element.classList.add('selected');
@@ -307,6 +346,12 @@ export class CommitTable {
 
 		const desc = el('div', 'cell desc');
 		const colour = model.colourOf(row);
+		if (model.config.colourRows) {
+			// The branch colour on every row (#254), so a commit's branch is
+			// visible next to its message, not only as a dot in the graph.
+			element.classList.add('coloured');
+			element.style.setProperty('--row-colour', colour);
+		}
 		for (const label of model.labels.get(commit.hash) ?? []) {
 			const tag = el('span', `label ${label.kind}${label.current ? ' current' : ''}`);
 			tag.title = label.title;
@@ -321,7 +366,7 @@ export class CommitTable {
 			desc.appendChild(tag);
 		}
 		const subject = el('span', 'subject');
-		appendHighlighted(subject, commit.subject, this.search?.matches.has(commit.hash) === true ? this.search.terms : []);
+		appendMessage(subject, commit.subject, this.search?.matches.has(commit.hash) === true ? this.search.terms : [], model.data.issueLinks);
 		subject.title = commit.body === '' ? commit.subject : `${commit.subject}\n\n${commit.body}`;
 		if (this.compact && commit.hash !== UNCOMMITTED) {
 			const when = formatDate(model.config.dateType === 'Commit Date' ? commit.committerDate : commit.authorDate, model.config.dateFormat);
@@ -361,8 +406,17 @@ export class CommitTable {
 	}
 
 	private onRowEvent(event: MouseEvent, context: boolean): void {
+		const link = (event.target as HTMLElement | null)?.closest<HTMLElement>('a.issue-link');
+		if (!context && link?.dataset.url !== undefined) {
+			this.callbacks.onOpenUrl(link.dataset.url);
+			return;
+		}
 		const hit = this.rowFromEvent(event);
 		if (hit === null) return;
+		if (!context && this.model?.collapsed.has(hit.commit.hash) === true) {
+			this.callbacks.onExpand(hit.commit.hash);
+			return;
+		}
 		// Right-clicking the selected row must not re-select it: that would toggle its details shut.
 		if (!context || hit.commit.hash !== this.selected) this.select(hit.commit.hash, !context);
 		if (context) {
@@ -412,7 +466,7 @@ export class CommitTable {
  */
 export function appendHighlighted(parent: HTMLElement, text: string, terms: readonly string[]): void {
 	if (terms.length === 0) {
-		parent.textContent = text;
+		parent.append(text);
 		return;
 	}
 	const lower = text.toLowerCase();
@@ -433,6 +487,26 @@ export function appendHighlighted(parent: HTMLElement, text: string, terms: read
 		cursor = end;
 	}
 	if (cursor < text.length) parent.append(text.slice(cursor));
+}
+
+/**
+ * Appends a commit message with issue references as links (#313) and search
+ * terms highlighted. Links carry their URL in a data attribute and are opened
+ * by the host on click; they are never real hrefs inside the webview.
+ */
+export function appendMessage(parent: HTMLElement, text: string, terms: readonly string[], rules: readonly IssueLinkRule[]): void {
+	for (const segment of linkify(text, rules)) {
+		if (segment.url === undefined) {
+			appendHighlighted(parent, segment.text, terms);
+			continue;
+		}
+		const link = document.createElement('a');
+		link.className = 'issue-link';
+		link.dataset.url = segment.url;
+		link.title = segment.url;
+		appendHighlighted(link, segment.text, terms);
+		parent.append(link);
+	}
 }
 
 /** Creates an element; text goes through textContent, never HTML, so commit content cannot inject markup. */

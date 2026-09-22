@@ -8,20 +8,27 @@ export interface BranchOption {
 	readonly ref: string;
 	/** Short name shown to the user. */
 	readonly name: string;
-	readonly remote: boolean;
+	readonly kind: 'local' | 'remote' | 'tag';
 	/** Hidden by an exclude pattern (#360). */
 	readonly excluded: boolean;
 }
 
-/** The branches offered by the picker: locals first, then remotes, each alphabetical. */
+/**
+ * The refs offered by the picker: local branches, remote branches, then tags
+ * (#465), each alphabetical.
+ */
 export function branchOptions(data: GraphData): BranchOption[] {
 	const excluded = new Set(data.excludedRefs);
-	const option = (ref: string, name: string, remote: boolean) => ({ ref, name, remote, excluded: excluded.has(ref) });
-	const locals = data.heads.map((head) => option(`refs/heads/${head.name}`, head.name, false));
-	const remotes = data.remoteHeads.map((remote) => option(`refs/remotes/${remote.name}`, remote.name, true));
+	const option = (ref: string, name: string, kind: BranchOption['kind']) => ({ ref, name, kind, excluded: excluded.has(ref) });
 	const byName = (a: BranchOption, b: BranchOption) => a.name.localeCompare(b.name);
-	return [...locals.sort(byName), ...remotes.sort(byName)];
+	return [
+		...data.heads.map((head) => option(`refs/heads/${head.name}`, head.name, 'local')).sort(byName),
+		...data.remoteHeads.map((remote) => option(`refs/remotes/${remote.name}`, remote.name, 'remote')).sort(byName),
+		...data.tags.map((tag) => option(`refs/tags/${tag.name}`, tag.name, 'tag')).sort(byName)
+	];
 }
+
+const GROUP_NAMES: Record<BranchOption['kind'], string> = { local: 'Local', remote: 'Remote', tag: 'Tags' };
 
 /**
  * Normalises a typed path to what git expects: repo-relative, forward
@@ -200,7 +207,7 @@ export class FilterControls {
 
 	constructor(private readonly callbacks: FilterCallbacks) {
 		this.branchButton = el('button', 'dropdown-button');
-		this.branchButton.title = 'Branches shown in the graph';
+		this.branchButton.title = 'Branches and tags shown in the graph';
 		this.branchButton.addEventListener('click', () => (this.popup.hidden ? this.openPopup() : this.closePopup()));
 
 		this.toggleButton = el('button', 'icon-button filter-toggle', 'Filter');
@@ -279,7 +286,7 @@ export class FilterControls {
 
 	private render(): void {
 		const selected = this.filter.branches;
-		const short = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, '');
+		const short = (ref: string) => ref.replace(/^refs\/(heads|remotes|tags)\//, '');
 		const hidden = this.filter.excludes.length;
 		this.branchButton.textContent =
 			(selected.length === 0 ? 'All Branches' : selected.length === 1 ? short(selected[0]) : `${selected.length} Branches`) +
@@ -311,7 +318,7 @@ export class FilterControls {
 		const query = previous?.value ?? '';
 		const hadFocus = previous !== null && document.activeElement === previous;
 		const search = el('input', 'branch-search');
-		search.placeholder = 'Search branches';
+		search.placeholder = 'Search branches and tags';
 		search.value = query;
 		search.spellcheck = false;
 
@@ -319,12 +326,12 @@ export class FilterControls {
 		const fill = () => {
 			const needle = search.value.trim().toLowerCase();
 			const rows: HTMLElement[] = [this.branchRow('All Branches', this.filter.branches.length === 0, () => this.update({ branches: [] }))];
-			let lastRemote: boolean | null = null;
+			let lastKind: BranchOption['kind'] | null = null;
 			for (const option of this.branches) {
 				if (needle !== '' && !option.name.toLowerCase().includes(needle)) continue;
-				if (option.remote !== lastRemote) {
-					rows.push(el('div', 'branch-group', option.remote ? 'Remote' : 'Local'));
-					lastRemote = option.remote;
+				if (option.kind !== lastKind) {
+					rows.push(el('div', 'branch-group', GROUP_NAMES[option.kind]));
+					lastKind = option.kind;
 				}
 				const checked = this.filter.branches.includes(option.ref);
 				const row = this.branchRow(option.name, checked, () => {

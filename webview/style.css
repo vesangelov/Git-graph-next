@@ -900,3 +900,77 @@ body.mode-sidebar {
 .args-error:empty {
 	display: none;
 }
+
+/* ---- Git notes (#475) ------------------------------------------------- */
+
+.label.note {
+	border-style: dotted;
+	border-radius: 3px;
+	opacity: 0.8;
+}
+
+.details-notes {
+	margin-top: 10px;
+}
+
+.details-notes-title {
+	font-weight: 600;
+	color: var(--vscode-descriptionForeground);
+	margin-bottom: 2px;
+}
+
+/* ---- Issue links (#313) ----------------------------------------------- */
+
+.issue-link {
+	color: var(--vscode-textLink-foreground);
+	cursor: pointer;
+	text-decoration: none;
+}
+
+.issue-link:hover {
+	color: var(--vscode-textLink-activeForeground);
+	text-decoration: underline;
+}
+
+.row.selected .issue-link {
+	color: inherit;
+	text-decoration: underline;
+}
+
+/* ---- Branch colour on rows (#254) ------------------------------------- */
+
+.row.commit.coloured .cell.desc {
+	box-shadow: inset 3px 0 0 var(--row-colour);
+	background: linear-gradient(90deg, color-mix(in srgb, var(--row-colour) 14%, transparent), transparent 40%);
+}
+
+/* ---- Compact mode (#387) ---------------------------------------------- */
+
+.row.commit.collapsed {
+	cursor: pointer;
+	color: var(--vscode-descriptionForeground);
+}
+
+.row.commit.collapsed .subject {
+	font-style: italic;
+}
+
+.collapsed-hint {
+	margin-left: 8px;
+	font-size: 0.9em;
+	opacity: 0;
+}
+
+.row.commit.collapsed:hover .collapsed-hint {
+	opacity: 0.8;
+}
+
+.graph-svg .vertex.collapsed {
+	fill: var(--vscode-editor-background);
+	stroke-width: 2;
+	stroke-dasharray: 2 2;
+}
+
+.filter-toggle.active {
+	border-color: var(--vscode-focusBorder);
+}

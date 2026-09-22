@@ -127,16 +127,24 @@ function sortChanges(changes: FileChange[]): FileChange[] {
 }
 
 /**
- * Reads a file at a revision as text. Resolves to '' when the file does not
- * exist there, which is what a diff against an added or deleted file needs.
+ * Reads a file's bytes at a revision, exactly as stored, or null when the file
+ * does not exist there. Bytes rather than text, so binary files and notebooks
+ * reach VS Code untouched and it can pick the right editor for them.
  */
-export async function readFileAtRevision(git: GitExecutor, repo: string, revision: Hash, path: string): Promise<string> {
+export async function readBlobAtRevision(git: GitExecutor, repo: string, revision: Hash, path: string): Promise<Buffer | null> {
 	try {
-		const buffer = await git.runBinary(repo, ['show', '--no-textconv', `${revision}:${path}`]);
-		// A NUL in the first 8 KiB is git's own heuristic for "binary".
-		if (buffer.subarray(0, 8000).includes(0)) return `Binary file ${path} is not shown.`;
-		return buffer.toString('utf8');
+		return await git.runBinary(repo, ['show', '--no-textconv', `${revision}:${path}`]);
 	} catch {
-		return '';
+		return null;
 	}
+}
+
+/**
+ * The content of the missing side of a diff (an added or deleted file).
+ * Normally nothing; but a notebook must parse as one, or VS Code's notebook
+ * diff (#598) refuses to open and falls back to raw JSON.
+ */
+export function emptySideContent(path: string): string {
+	if (path.toLowerCase().endsWith('.ipynb')) return JSON.stringify({ cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 });
+	return '';
 }

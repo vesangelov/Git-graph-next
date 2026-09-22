@@ -83,6 +83,8 @@ export interface GraphRenderInput {
 	readonly uncommittedHash: Hash;
 	/** Hashes of stash rows, drawn with a distinct marker. */
 	readonly stashHashes: ReadonlySet<Hash>;
+	/** Stand-in rows for collapsed runs (#387), drawn as a dashed ring. */
+	readonly collapsedHashes?: ReadonlyMap<Hash, unknown>;
 }
 
 /**
@@ -126,7 +128,11 @@ export function renderGraph(svg: SVGSVGElement, input: GraphRenderInput): void {
 		const circle = document.createElementNS(SVG_NS, 'circle');
 		circle.setAttribute('cx', String(cx));
 		circle.setAttribute('cy', String(cy));
-		if (vertex.hash === input.uncommittedHash) {
+		if (input.collapsedHashes?.has(vertex.hash) === true) {
+			circle.setAttribute('r', '4.5');
+			circle.setAttribute('class', 'vertex collapsed');
+			circle.setAttribute('stroke', stroke);
+		} else if (vertex.hash === input.uncommittedHash) {
 			circle.setAttribute('r', '4');
 			circle.setAttribute('class', 'vertex uncommitted');
 		} else if (vertex.hash === input.headHash) {
