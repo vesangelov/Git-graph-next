@@ -61,6 +61,10 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | Interactive rebase (#757, #113) | git's own editor protocol: `GIT_SEQUENCE_EDITOR`/`GIT_EDITOR` = a bundled script (`dist/editor.js`) run with VS Code's Node (`ELECTRON_RUN_AS_NODE`), talking to the extension over a local socket with a per-session token; the file opens in a normal VS Code editor with Start/Cancel; closing the tab = done | git builds the list itself, so every rebase option works; no reimplementation of the todo format. |
 | Squash / drop selected commits (#182) | The same bridge rewrites git's own todo lines (`rewriteTodo`), optionally shown for review; refused off the current branch, over merges, or with a stale base (`checkRewrite`) | Only the lines for the chosen commits change. |
 | Patches (#538) | Paths come only from VS Code's file dialogs on the host, never from the view; `format-patch` per commit, `git diff --binary HEAD` for uncommitted changes; apply with `git apply` or `git am` | Nothing from the webview becomes a path. |
+| Code review (session 11) | Review a commit, two commits, or a branch against another from their merge base (the pull-request view). Files snapshot at start; opening a diff anywhere marks it reviewed; Alt+] / Alt+[ (context key `gitGraphNext.reviewActive`) step through unreviewed files from the diff editor; sessions in `workspaceState` | The user asked for review to be "fast and easy to compare". Keyboard stepping from the editor avoids going back to the graph per file. |
+| All Changes | `vscode.changes` (multi-diff editor, VS Code 1.86+), feature-detected at run time; falls back to the first file's diff | Keeps `engines` at 1.85. |
+| Webview → host values | Every `ChangeTarget` is validated at the controller boundary (`src/view/validation.ts`); branch names for review must not look like options | Found in session 11: read paths (selectCommit, openDiff) had never validated hashes, only the actions did. |
+| Avatars | Opt-in (`fetchAvatars`, off); fetched on the host for rows on screen; Gravatar by MD5 of the address, GitHub for no-reply addresses; 500-entry cache | Privacy: it tells third parties which authors appear. README's Privacy section says so. |
 | Filter scope | Per repository, persisted in the panel's webview state; the sidebar never filters | Keeps the sidebar a quick overview. |
 | Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
 | Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
@@ -263,8 +267,31 @@ decisions.
 - Found by the screenshots: "Search older commits" showed before any search;
   right-click opened the details pane. Both fixed.
 
+Session 11 — Phase 5: code review, parity, quick wins. **132/132 tests pass,
+`tsc --noEmit` clean, packaged and installed.** Awaiting live verification.
+
+- Code review: `src/view/review.ts` (ReviewManager), details-pane buttons
+  (All Changes, Review, progress, ‹ Prev / Next › / End), ✓ in the details
+  and the Changes view, commands + keybindings + status bar; "Review <branch>
+  Against <current>" on branch labels; "Start Code Review" on commits and on
+  two selected commits.
+- `src/view/diff.ts`: `changeSides`, `openAllChanges`, `openFileAtRevision`,
+  `compareWithWorkingFile`.
+- Parity with the original: Repository Settings (add / change / remove
+  remote, user for this repository), Create Archive, Open External Directory
+  Diff (graphical tools only), Open File at This Revision, Compare with
+  Working File, avatars, Clear Avatar Cache, resume / end code reviews.
+- Quick wins: check out tag (#722), force-push tag (#574), fetch --no-tags
+  (#737), commit web link (#564), plain URLs linked (#899), HEAD button
+  (#821), "Current Branch (HEAD)" filter (#753), Output channel (#848), Copy
+  Commit Message (#855).
+- Tests: CR in commit messages (#935/#880), actions for remotes / user /
+  tag force / archive, avatar URLs, URL links, target validation, review UI.
+
 ### Not started
 
+- Not done from the original: export of settings (low value). Worktrees and
+  submodules (#668, #790, #778, #789) are not specially handled.
 - The user's decisions above (publisher, repository URL) and the first publish.
 - Windows: CI will show whether the suite passes there.
 - #675 (restore the graph tab after a restart): the serializer exists since
@@ -601,3 +628,21 @@ nothing.
 
 **Next action:** the user's publisher and repository decisions; then a first
 publish from a `v0.1.0` tag. Check #675 live.
+
+### Session 11 — 2026-09-22
+
+**Goal:** Phase 5 — the user asked for a fast, easy code review mode first,
+then the parity items and quick wins proposed after comparing the project with
+all 311 open issues of the original.
+
+The user committed Phase 4 and asked whether every request of the original's
+users is now covered; the honest answer (session 10 end) was no — the top 25 by
+demand are, the long tail is not, and parity with the original was
+incomplete. Built code review, the parity items and the quick wins (see §3).
+A security pass over the new messages found that hashes on read paths were
+never validated; all targets are now checked at the boundary.
+
+**Stopped at:** Phase 5 built, installed, awaiting the user's live check.
+
+**Next action:** live check of code review (Alt+] from the diff editor,
+resume after restart), then the publisher / repository decisions.

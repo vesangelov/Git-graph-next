@@ -2,6 +2,7 @@ import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileC
 import { formatDateLong, shortHash } from './format.ts';
 import { appendMessage, el, type RefLabel } from './render/table.ts';
 import type { IssueLinkRule } from '../src/git/remote.ts';
+import type { ReviewSummary } from '../src/view/protocol.ts';
 
 /** Smallest height the pane can be dragged to, and the share of the view it may take at most. */
 const MIN_HEIGHT = 120;
@@ -14,6 +15,10 @@ export interface DetailsCallbacks {
 	onClose(): void;
 	onResize(height: number): void;
 	onOpenUrl(url: string): void;
+	/** Every changed file in one editor (#807). */
+	onOpenAllChanges(target: ChangeTarget, title: string): void;
+	onStartReview(target: ChangeTarget, title: string): void;
+	onReview(command: 'next' | 'previous' | 'end'): void;
 }
 
 const STATUS_NAMES: Record<FileChangeType, string> = {
@@ -40,6 +45,12 @@ export class DetailsPane {
 	private readonly files: HTMLElement;
 
 	private target: ChangeTarget | null = null;
+	private readonly actions: HTMLElement;
+	/** The files shown, kept to redraw review marks without reloading. */
+	private shownChanges: readonly FileChange[] | null = null;
+	/** The active code review, when it is of what the pane shows. */
+	private review: ReviewSummary | null = null;
+	private allReviews: ReviewSummary | null = null;
 	/** A single commit, a comparison of two (#182), or a summary of more. */
 	private mode: 'single' | 'compare' | 'summary' = 'single';
 	private links: readonly IssueLinkRule[] = [];
@@ -54,10 +65,11 @@ export class DetailsPane {
 
 		const header = el('div', 'details-header');
 		this.title = el('span', 'details-title');
+		this.actions = el('span', 'details-actions');
 		const close = el('button', 'icon-button', '×');
 		close.title = 'Close (Escape)';
 		close.addEventListener('click', () => this.callbacks.onClose());
-		header.append(this.title, close);
+		header.append(this.title, this.actions, close);
 
 		const content = el('div', 'details-content');
 		this.meta = el('div', 'details-meta');
@@ -92,6 +104,7 @@ export class DetailsPane {
 	openComparison(repo: string, older: Commit, newer: Commit): ChangeTarget {
 		this.mode = 'compare';
 		this.target = { repo, hash: newer.hash, base: older.hash };
+		this.shownChanges = null;
 		this.element.hidden = false;
 		const name = (c: Commit) => (c.hash === UNCOMMITTED ? 'working tree' : shortHash(c.hash));
 		this.title.textContent = `Comparing ${name(older)} → ${name(newer)}`;
@@ -110,6 +123,7 @@ export class DetailsPane {
 			el('div', 'details-message', 'Every change between the two, as one diff per file. Right-click the selection for actions on both commits.')
 		);
 		this.files.replaceChildren(el('div', 'details-note', 'Loading changed files…'));
+		this.syncReview();
 		return this.target;
 	}
 
@@ -126,18 +140,21 @@ export class DetailsPane {
 			list.appendChild(line);
 		}
 		this.meta.replaceChildren(list);
+		this.renderActions();
 		this.files.replaceChildren(el('div', 'details-note', 'Right-click the selection for actions on all of them: cherry-pick, revert, squash, drop, create patches.'));
 	}
 
 	open(repo: string, commit: Commit, labels: readonly RefLabel[], links: readonly IssueLinkRule[] = []): void {
 		this.mode = 'single';
 		this.links = links;
+		this.shownChanges = null;
 		this.target = changeTarget(repo, commit);
 		this.element.hidden = false;
 		this.title.textContent = commit.hash === UNCOMMITTED ? commit.subject : `${shortHash(commit.hash)}  ${commit.subject}`;
 		this.title.title = this.title.textContent;
 		this.renderMeta(commit, labels);
 		this.files.replaceChildren(el('div', 'details-note', 'Loading changed files…'));
+		this.syncReview();
 	}
 
 	/** Adds a commit's git note (#475) under its message. */
@@ -153,10 +170,56 @@ export class DetailsPane {
 		this.target = null;
 	}
 
+	/** The active code review (or none); redraws the marks when it is of what is shown. */
+	setReview(review: ReviewSummary | null): void {
+		this.allReviews = review;
+		this.syncReview();
+		if (this.target !== null && this.shownChanges !== null) this.showChanges(this.target.hash, this.shownChanges, null);
+	}
+
+	private syncReview(): void {
+		const target = this.target;
+		const review = this.allReviews;
+		this.review = review !== null && target !== null && review.repo === target.repo && review.hash === target.hash && review.base === target.base ? review : null;
+		this.renderActions();
+	}
+
+	/** All Changes and Review, or the active review's progress and navigation. */
+	private renderActions(): void {
+		const target = this.target;
+		const button = (text: string, title: string, action: () => void, primary = false) => {
+			const element = el('button', `details-button${primary ? ' primary' : ''}`, text);
+			element.title = title;
+			element.addEventListener('click', action);
+			return element;
+		};
+		if (target === null || this.mode === 'summary') {
+			this.actions.replaceChildren();
+			return;
+		}
+		const title = this.title.textContent ?? '';
+		const items: HTMLElement[] = [button('All Changes', 'Open every changed file in one scrolling editor', () => this.callbacks.onOpenAllChanges(target, title))];
+		const review = this.review;
+		if (review === null) {
+			items.push(button('Review', 'Start a code review: go through the files one by one, tracking which you have seen (Alt+] next, Alt+[ previous)', () => this.callbacks.onStartReview(target, title), true));
+		} else {
+			const done = review.reviewed.length === review.total;
+			items.push(
+				el('span', `review-progress${done ? ' done' : ''}`, `${review.reviewed.length}/${review.total} reviewed`),
+				button('‹ Prev', 'Previous file not yet reviewed (Alt+[)', () => this.callbacks.onReview('previous')),
+				button('Next ›', 'Next file not yet reviewed (Alt+])', () => this.callbacks.onReview('next'), !done),
+				button('End Review', 'End this code review', () => this.callbacks.onReview('end'))
+			);
+		}
+		this.actions.replaceChildren(...items);
+	}
+
 	/** Shows a commit's files, unless the pane has since moved to another commit. */
 	showChanges(hash: Hash, changes: readonly FileChange[] | null, error: string | null): void {
 		const target = this.target;
 		if (target === null || target.hash !== hash) return;
+		this.shownChanges = changes;
+		this.renderActions();
 		if (changes === null) {
 			this.files.replaceChildren(el('div', 'details-note error', error ?? 'Could not load the changed files.'));
 			return;
@@ -175,7 +238,15 @@ export class DetailsPane {
 			el('span', 'deletions', `−${deletions}`)
 		);
 		const list = el('div', 'file-list');
-		for (const change of changes) list.appendChild(this.renderFile(target, change));
+		const reviewed = new Set(this.review?.reviewed ?? []);
+		for (const change of changes) {
+			const row = this.renderFile(target, change);
+			if (this.review !== null) {
+				row.classList.toggle('reviewed', reviewed.has(change.path));
+				row.classList.toggle('current', this.review.current === change.path);
+			}
+			list.appendChild(row);
+		}
 		this.files.replaceChildren(summary, list);
 	}
 

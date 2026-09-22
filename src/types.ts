@@ -242,6 +242,8 @@ export interface GraphData {
 	readonly moreAvailable: boolean;
 	/** Remote names, for the push / fetch / delete-on-remote choices. */
 	readonly remotes: readonly string[];
+	/** The web page of a commit is this plus its hash (#564); null without a hosted remote. */
+	readonly commitUrlPrefix: string | null;
 	/** Issue-link rules for this repository (#313), `$n` still to be filled per match. */
 	readonly issueLinks: readonly { readonly pattern: string; readonly url: string }[];
 	/** Loaded commits that have a git note (#475). */
@@ -279,8 +281,17 @@ export type GitAction =
 	| { readonly kind: 'deleteRemoteBranch'; readonly remote: string; readonly branch: string }
 	| { readonly kind: 'createTag'; readonly name: string; readonly target: Hash; readonly message: string | null; readonly force: boolean; readonly pushTo: string | null }
 	| { readonly kind: 'deleteTag'; readonly name: string; readonly deleteOnRemote: string | null }
-	| { readonly kind: 'pushTag'; readonly name: string; readonly remote: string }
-	| { readonly kind: 'fetch'; readonly remote: string | null; readonly prune: boolean; readonly pruneTags: boolean }
+	/** `force` replaces a tag of the same name on the remote (#574). */
+	| { readonly kind: 'pushTag'; readonly name: string; readonly remote: string; readonly force: boolean }
+	| { readonly kind: 'fetch'; readonly remote: string | null; readonly prune: boolean; readonly pruneTags: boolean; readonly noTags: boolean }
+	/** Repository settings, as the original's Repository Settings offered. */
+	| { readonly kind: 'addRemote'; readonly name: string; readonly url: string; readonly fetch: boolean }
+	| { readonly kind: 'setRemoteUrl'; readonly name: string; readonly url: string }
+	| { readonly kind: 'removeRemote'; readonly name: string }
+	/** Sets `user.name` / `user.email` for this repository only; empty unsets. */
+	| { readonly kind: 'setUserConfig'; readonly name: string; readonly email: string }
+	/** Writes `git archive` of a commit to a file the host asks for. */
+	| { readonly kind: 'createArchive'; readonly hash: Hash; readonly format: 'zip' | 'tar.gz' }
 	| { readonly kind: 'pull'; readonly mode: 'merge' | 'rebase' | 'ff-only' }
 	| {
 			readonly kind: 'push';

@@ -14,6 +14,8 @@ export interface ActionContext {
 	run(action: GitAction): Promise<string | null>;
 	/** Local branches fully merged into HEAD, from the host; null when unknown. */
 	mergedBranches(): Promise<readonly string[] | null>;
+	/** Asks the host something a dialog needs; null when git could not answer. */
+	query(what: 'userConfig'): Promise<readonly string[] | null>;
 }
 
 const ancestry = new WeakMap<GraphData, ReadonlySet<string>>();
@@ -173,10 +175,35 @@ export function commitActions(ctx: ActionContext, commit: Commit): MenuItem[] {
 
 	const inHistory = historyOfHead(ctx.data).has(hash);
 	if (inHistory) items.push({ separator: true }, ...historyActions(ctx, commit));
-	items.push({ separator: true }, {
-		label: 'Create Patch…',
-		action: () => void runNow(ctx, { kind: 'createPatch', hashes: [hash] }, 'Creating the patch')
-	});
+	items.push(
+		{ separator: true },
+		{ label: 'Create Patch…', action: () => void runNow(ctx, { kind: 'createPatch', hashes: [hash] }, 'Creating the patch') },
+		{
+			label: 'Create Archive…',
+			action: () =>
+				ask(
+					ctx,
+					{
+						title: `Archive the files of ${short}`,
+						message: 'Every tracked file as it is at this commit, without the history. You choose where to save it next.',
+						fields: [
+							{
+								type: 'select',
+								id: 'format',
+								label: 'Format',
+								options: [
+									{ value: 'zip', label: 'Zip (.zip)' },
+									{ value: 'tar.gz', label: 'Gzipped tar (.tar.gz)' }
+								],
+								value: 'zip'
+							}
+						],
+						confirm: 'Choose Location…'
+					},
+					(v) => ({ kind: 'createArchive', hash, format: text(v, 'format') === 'tar.gz' ? 'tar.gz' : 'zip' })
+				)
+		}
+	);
 
 	if (current !== null && !isHead) {
 		items.push({ separator: true });
@@ -637,16 +664,37 @@ export function labelActions(ctx: ActionContext, label: RefLabel, commit: Commit
 		}
 		case 'tag': {
 			const name = label.name;
-			const items: MenuItem[] = [];
+			const items: MenuItem[] = [
+				{
+					label: 'Check Out Tag…',
+					action: () =>
+						ask(
+							ctx,
+							{
+								title: `Check out ${name}`,
+								message: 'HEAD will be detached at the tagged commit: new commits will not belong to any branch until you create one.',
+								confirm: 'Check Out'
+							},
+							() => ({ kind: 'checkoutDetached', hash: commit.hash })
+						)
+				}
+			];
 			if (ctx.data.remotes.length > 0) {
 				items.push({
 					label: 'Push Tag…',
 					action: () =>
-						ask(ctx, { title: `Push tag ${name}`, fields: [remoteField(ctx, 'remote', 'Remote', null, false)], confirm: 'Push' }, (v) => ({
-							kind: 'pushTag',
-							name,
-							remote: text(v, 'remote')
-						}))
+						ask(
+							ctx,
+							{
+								title: `Push tag ${name}`,
+								fields: [
+									remoteField(ctx, 'remote', 'Remote', null, false),
+									{ type: 'checkbox', id: 'force', label: 'Replace a different tag of the same name on the remote (--force)' }
+								],
+								confirm: 'Push'
+							},
+							(v) => ({ kind: 'pushTag', name, remote: text(v, 'remote'), force: flag(v, 'force') })
+						)
 				});
 			}
 			items.push({
@@ -780,12 +828,101 @@ export function fetchDialog(ctx: ActionContext): void {
 			fields: [
 				{ type: 'select', id: 'remote', label: 'From', options: [{ value: '', label: 'All remotes' }, ...ctx.data.remotes.map((r) => ({ value: r, label: r }))], value: '' },
 				{ type: 'checkbox', id: 'prune', label: 'Prune remote branches deleted on the remote', value: ctx.config.fetchAndPrune },
-				{ type: 'checkbox', id: 'pruneTags', label: 'Also prune local tags deleted on the remote', value: ctx.config.fetchAndPruneTags }
+				{ type: 'checkbox', id: 'pruneTags', label: 'Also prune local tags deleted on the remote', value: ctx.config.fetchAndPruneTags },
+				{ type: 'checkbox', id: 'noTags', label: 'Do not fetch tags (--no-tags)' }
 			],
 			confirm: 'Fetch'
 		},
-		(v) => ({ kind: 'fetch', remote: text(v, 'remote') === '' ? null : text(v, 'remote'), prune: flag(v, 'prune'), pruneTags: flag(v, 'prune') && flag(v, 'pruneTags') })
+		(v) => ({
+			kind: 'fetch',
+			remote: text(v, 'remote') === '' ? null : text(v, 'remote'),
+			prune: flag(v, 'prune'),
+			pruneTags: flag(v, 'prune') && flag(v, 'pruneTags'),
+			noTags: flag(v, 'noTags')
+		})
 	);
+}
+
+/**
+ * Repository settings, as the original's Repository Settings widget offered:
+ * the remotes, and who commits in this repository.
+ */
+export function repositorySettingsItems(ctx: ActionContext): MenuItem[] {
+	const remotes = ctx.data.remotes.map((r) => ({ value: r, label: r }));
+	const items: MenuItem[] = [
+		{
+			label: 'Add Remote…',
+			action: () =>
+				ask(
+					ctx,
+					{
+						title: 'Add a remote',
+						fields: [
+							{ type: 'text', id: 'name', label: 'Name', value: ctx.data.remotes.includes('origin') ? '' : 'origin', required: true },
+							{ type: 'text', id: 'url', label: 'URL', placeholder: 'https://github.com/owner/repo.git', required: true },
+							{ type: 'checkbox', id: 'fetch', label: 'Fetch from it now', value: true }
+						],
+						confirm: 'Add Remote'
+					},
+					(v) => ({ kind: 'addRemote', name: text(v, 'name'), url: text(v, 'url'), fetch: flag(v, 'fetch') })
+				)
+		}
+	];
+	if (remotes.length > 0) {
+		items.push(
+			{
+				label: 'Change Remote URL…',
+				action: () =>
+					ask(
+						ctx,
+						{
+							title: 'Change a remote’s URL',
+							fields: [
+								{ type: 'select', id: 'name', label: 'Remote', options: remotes, value: remotes[0].value },
+								{ type: 'text', id: 'url', label: 'New URL', required: true }
+							],
+							confirm: 'Change URL'
+						},
+						(v) => ({ kind: 'setRemoteUrl', name: text(v, 'name'), url: text(v, 'url') })
+					)
+			},
+			{
+				label: 'Remove Remote…',
+				action: () =>
+					ask(
+						ctx,
+						{
+							title: 'Remove a remote',
+							message: 'Its remote-tracking branches are deleted from this repository. Nothing on the remote itself changes.',
+							fields: [{ type: 'select', id: 'name', label: 'Remote', options: remotes, value: remotes[0].value }],
+							confirm: 'Remove',
+							danger: true
+						},
+						(v) => ({ kind: 'removeRemote', name: text(v, 'name') })
+					)
+			}
+		);
+	}
+	items.push({
+		label: 'Set User for This Repository…',
+		action: async () => {
+			const [name, email] = (await ctx.query('userConfig')) ?? ['', ''];
+			ask(
+				ctx,
+				{
+					title: 'User for this repository',
+					message: 'Used for commits made in this repository only. Leave a field empty to use your global setting.',
+					fields: [
+						{ type: 'text', id: 'name', label: 'Name', value: name ?? '' },
+						{ type: 'text', id: 'email', label: 'E-mail', value: email ?? '' }
+					],
+					confirm: 'Save'
+				},
+				(v) => ({ kind: 'setUserConfig', name: text(v, 'name'), email: text(v, 'email') })
+			);
+		}
+	});
+	return items;
 }
 
 /** Continue / Abort for an interrupted operation (#519). */

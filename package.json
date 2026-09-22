@@ -109,6 +109,45 @@
         "title": "Fetch",
         "category": "Git Graph Next",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "gitGraphNext.review.next",
+        "title": "Code Review: Next File",
+        "category": "Git Graph Next",
+        "icon": "$(arrow-right)"
+      },
+      {
+        "command": "gitGraphNext.review.previous",
+        "title": "Code Review: Previous File",
+        "category": "Git Graph Next",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "gitGraphNext.review.openAll",
+        "title": "Code Review: Open All Files in One Editor",
+        "category": "Git Graph Next",
+        "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "gitGraphNext.review.end",
+        "title": "Code Review: End Review",
+        "category": "Git Graph Next",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "gitGraphNext.resumeWorkspaceCodeReview",
+        "title": "Resume a Code Review…",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.endAllWorkspaceCodeReviews",
+        "title": "End All Code Reviews in This Workspace",
+        "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.clearAvatarCache",
+        "title": "Clear Avatar Cache",
+        "category": "Git Graph Next"
       }
     ],
     "menus": {
@@ -140,6 +179,22 @@
         {
           "command": "gitGraphNext.fetch",
           "when": "false"
+        },
+        {
+          "command": "gitGraphNext.review.next",
+          "when": "gitGraphNext.reviewActive"
+        },
+        {
+          "command": "gitGraphNext.review.previous",
+          "when": "gitGraphNext.reviewActive"
+        },
+        {
+          "command": "gitGraphNext.review.openAll",
+          "when": "gitGraphNext.reviewActive"
+        },
+        {
+          "command": "gitGraphNext.review.end",
+          "when": "gitGraphNext.reviewActive"
         }
       ],
       "scm/title": [
@@ -181,6 +236,26 @@
           "command": "gitGraphNext.openFullGraph",
           "when": "view == gitGraphNext.graphView",
           "group": "navigation@2"
+        },
+        {
+          "command": "gitGraphNext.review.previous",
+          "when": "view == gitGraphNext.changesView && gitGraphNext.reviewActive",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gitGraphNext.review.next",
+          "when": "view == gitGraphNext.changesView && gitGraphNext.reviewActive",
+          "group": "navigation@2"
+        },
+        {
+          "command": "gitGraphNext.review.openAll",
+          "when": "view == gitGraphNext.changesView && gitGraphNext.reviewActive",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gitGraphNext.review.end",
+          "when": "view == gitGraphNext.changesView && gitGraphNext.reviewActive",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -434,6 +509,12 @@
           "description": "Mark commits that have git notes, and show the note in the commit details.",
           "scope": "resource"
         },
+        "git-graph-next.fetchAvatars": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show author avatars. **This contacts other services:** for each author shown, the MD5 hash of their e-mail address is sent to Gravatar, or their user name to GitHub for GitHub no-reply addresses. Avatars are cached; clear them with **Git Graph Next: Clear Avatar Cache**.",
+          "scope": "window"
+        },
         "git-graph-next.issueLinking.autoDetect": {
           "type": "boolean",
           "default": true,
@@ -560,7 +641,19 @@
           "contextualTitle": "Git Graph Next"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "gitGraphNext.review.next",
+        "key": "alt+]",
+        "when": "gitGraphNext.reviewActive"
+      },
+      {
+        "command": "gitGraphNext.review.previous",
+        "key": "alt+[",
+        "when": "gitGraphNext.reviewActive"
+      }
+    ]
   },
   "scripts": {
     "compile": "node esbuild.mjs",

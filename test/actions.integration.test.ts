@@ -62,7 +62,7 @@ test('rejects values that git would read as options, and malformed hashes', () =
 	assert.throws(() => validateAction({ kind: 'merge', ref: '-X', noFastForward: false, squash: false, noCommit: false }), InvalidActionError);
 	assert.throws(() => validateAction({ kind: 'reset', hash: 'HEAD~1', mode: 'hard' }), InvalidActionError);
 	assert.throws(() => validateAction({ kind: 'stashDrop', selector: 'stash@{0} --all' }), InvalidActionError);
-	assert.throws(() => validateAction({ kind: 'fetch', remote: 'origin\nrm', prune: false, pruneTags: false }), InvalidActionError);
+	assert.throws(() => validateAction({ kind: 'fetch', remote: 'origin\nrm', prune: false, pruneTags: false, noTags: false }), InvalidActionError);
 	assert.throws(() => validateAction({ kind: 'nope' } as unknown as GitAction), InvalidActionError);
 });
 
@@ -121,7 +121,7 @@ test('creates lightweight and annotated tags, pushes and deletes them locally an
 	assert.match(sh(repo, 'tag', '-l', '--format=%(contents)', 'v1.0'), /with "notes" \$\(x\)/);
 	assert.equal(sh(origin, 'tag', '-l'), 'v1.0', 'pushed to the remote');
 
-	await run({ kind: 'pushTag', name: 'light', remote: 'origin' });
+	await run({ kind: 'pushTag', name: 'light', remote: 'origin', force: false });
 	await run({ kind: 'deleteTag', name: 'v1.0', deleteOnRemote: 'origin' });
 	assert.equal(sh(repo, 'tag', '-l'), 'light');
 	assert.equal(sh(origin, 'tag', '-l'), 'light');
@@ -156,9 +156,9 @@ test('fetches with prune, and pulls in each mode', async () => {
 	sh(repo, 'fetch', '-q', 'origin');
 	sh(other, 'push', '-q', 'origin', '--delete', 'doomed');
 
-	await run({ kind: 'fetch', remote: 'origin', prune: true, pruneTags: false });
+	await run({ kind: 'fetch', remote: 'origin', prune: true, pruneTags: false, noTags: false });
 	assert.equal(sh(repo, 'branch', '-r', '--list', 'origin/doomed'), '', 'pruned');
-	await run({ kind: 'fetch', remote: null, prune: false, pruneTags: false });
+	await run({ kind: 'fetch', remote: null, prune: false, pruneTags: false, noTags: false });
 
 	await run({ kind: 'pull', mode: 'ff-only' });
 	assert.equal(sh(repo, 'log', '-1', '--format=%s'), 'from other');
@@ -238,4 +238,36 @@ test('recognises credential failures and quotes commands for a terminal', () => 
 	assert.ok(!isCredentialFailure('error: failed to push some refs'));
 	assert.equal(shellCommand('git', ['push', 'origin', "it's here"], false), `git push origin 'it'\\''s here'`);
 	assert.equal(shellCommand('C:\\Program Files\\Git\\bin\\git.exe', ['push', "a'b"], true), `& 'C:\\Program Files\\Git\\bin\\git.exe' push 'a''b'`);
+});
+
+test('force-pushes a moved tag, and manages remotes and the repository user', async () => {
+	const first = sh(repo, 'rev-parse', 'HEAD~1');
+	sh(repo, 'tag', 'moving', first);
+	await run({ kind: 'pushTag', name: 'moving', remote: 'origin', force: false });
+	sh(repo, 'tag', '-f', 'moving', 'HEAD');
+	await assert.rejects(run({ kind: 'pushTag', name: 'moving', remote: 'origin', force: false }), /already exists|rejected/);
+	await run({ kind: 'pushTag', name: 'moving', remote: 'origin', force: true });
+	assert.equal(sh(origin, 'rev-parse', 'moving'), sh(repo, 'rev-parse', 'HEAD'));
+
+	await run({ kind: 'addRemote', name: 'mirror', url: origin, fetch: true });
+	assert.equal(sh(repo, 'rev-parse', 'mirror/main'), sh(repo, 'rev-parse', 'origin/main'), 'fetched right away');
+	await run({ kind: 'setRemoteUrl', name: 'mirror', url: join(root, 'elsewhere.git') });
+	assert.equal(sh(repo, 'remote', 'get-url', 'mirror'), join(root, 'elsewhere.git'));
+	await run({ kind: 'removeRemote', name: 'mirror' });
+	assert.equal(sh(repo, 'remote'), 'origin');
+	await run({ kind: 'fetch', remote: 'origin', prune: false, pruneTags: false, noTags: true });
+
+	await run({ kind: 'setUserConfig', name: 'Иван Петров', email: 'ivan@example.com' });
+	assert.equal(sh(repo, 'config', '--local', 'user.name'), 'Иван Петров');
+	await run({ kind: 'setUserConfig', name: '', email: '' });
+	assert.throws(() => sh(repo, 'config', '--local', 'user.name'), 'an empty field removes the repository’s own value');
+	assert.throws(() => validateAction({ kind: 'setUserConfig', name: 'a\nb', email: '' }), InvalidActionError);
+});
+
+test('the archive and empty-tree commands work as the host uses them', async () => {
+	const zip = await git.runBinary(repo, ['archive', '--format=zip', sh(repo, 'rev-parse', 'HEAD')]);
+	assert.equal(zip.subarray(0, 2).toString(), 'PK', 'a zip file');
+	const tgz = await git.runBinary(repo, ['archive', '--format=tar.gz', 'HEAD']);
+	assert.deepEqual([...tgz.subarray(0, 2)], [0x1f, 0x8b], 'gzip');
+	assert.equal((await git.run(repo, ['mktree'], { stdin: '' })).trim(), '4b825dc642cb6eb9a060e54bf8d69288fbee4904', 'the empty tree');
 });

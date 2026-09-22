@@ -60,6 +60,7 @@ function data(): GraphData {
 		notedCommits: [],
 		issueLinks: [],
 		remotes: [],
+		commitUrlPrefix: null,
 		maxCommits: 100
 	};
 }

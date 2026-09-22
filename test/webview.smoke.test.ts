@@ -24,7 +24,7 @@ const config: ViewConfig = {
 	colours: ['#0085d9', '#d9008f', '#00d90a'], graphStyle: 'rounded', dateType: 'Author Date', dateFormat: 'Date & Time', stickyHeader: true,
 	combineLocalAndRemoteBranchLabels: true, showRemoteHeads: true, maxCommits: 300, loadMoreCommits: 100, loadMoreCommitsAutomatically: true,
 	showRemoteBranches: true, showTags: true, pinnedBranches: ['main'], branchColours: [['main', '#ff0000']], colourRows: true,
-	tagsOnRight: true, fetchAndPrune: false, fetchAndPruneTags: false
+	tagsOnRight: true, avatars: false, fetchAndPrune: false, fetchAndPruneTags: false
 };
 
 /** A linear main of 30 commits, a feature branch off commit 20, a tag, and uncommitted changes. */
@@ -44,6 +44,7 @@ function graph(pendingOperation: PendingOperation | null = null): GraphData {
 		remoteHeadSymrefs: { origin: 'origin/main' },
 		moreAvailable: false,
 		remotes: ['origin'],
+		commitUrlPrefix: 'https://example.test/acme/app/commit/',
 		issueLinks: [{ pattern: '#(\\d+)', url: 'https://example.test/issues/$1' }],
 		notedCommits: [h(5)],
 		excludedRefs: [],
@@ -230,4 +231,28 @@ test('deletes several branches, with merged ones pre-ticked', async () => {
 	assert.equal(boxes[0].checked, true, 'feature is merged, so ticked');
 	(doc().querySelector('.dialog form') as HTMLFormElement).requestSubmit();
 	assert.deepEqual(lastPosted('runAction')!.action, { kind: 'deleteBranches', names: ['feature'], force: false });
+});
+
+test('starts a code review and shows its progress and navigation', async () => {
+	click(rowFor(7));
+	await flush();
+	const target = lastPosted('selectCommit')!.target;
+	send({ type: 'changes', repo: '/repo', hash: h(7), changes: [
+		{ type: 'M', path: 'a.ts', oldPath: null, additions: 1, deletions: 0 },
+		{ type: 'A', path: 'b.ts', oldPath: null, additions: 3, deletions: 0 }
+	], error: null, note: null });
+	const reviewButton = [...doc().querySelectorAll('.details-button')].find((b) => b.textContent === 'Review') as HTMLElement;
+	reviewButton.click();
+	const start = lastPosted('review') as Extract<WebviewMessage, { type: 'review'; command: 'start' }>;
+	assert.equal(start.command, 'start');
+	assert.deepEqual(start.target, target);
+
+	send({ type: 'reviewState', review: { repo: '/repo', hash: h(7), base: h(8), title: 'x', total: 2, reviewed: ['a.ts'], current: 'a.ts' } });
+	assert.equal(doc().querySelector('.review-progress')!.textContent, '1/2 reviewed');
+	assert.ok(doc().querySelector('.file.reviewed') !== null, 'the reviewed file is marked');
+	([...doc().querySelectorAll('.details-button')].find((b) => b.textContent === 'Next ›') as HTMLElement).click();
+	assert.equal((lastPosted('review') as { command: string }).command, 'next');
+
+	send({ type: 'reviewState', review: null });
+	assert.ok([...doc().querySelectorAll('.details-button')].some((b) => b.textContent === 'Review'), 'back to the Review button');
 });

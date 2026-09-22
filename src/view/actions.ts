@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { GitExecutor } from '../git/executor.ts';
 import { GitError, CancelledError } from '../git/executor.ts';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { InvalidActionError, checkRefNames, checkRewrite, describeAction, isCredentialFailure, planAction, rewriteTodo, shellCommand, validateAction } from '../git/actions.ts';
 import type { EditorBridge } from '../git/editorBridge.ts';
 import { applyPatches, commitPatch, commitSubject, patchFileName, uncommittedPatch } from '../git/patches.ts';
@@ -31,7 +31,9 @@ export class ActionRunner {
 		private readonly git: GitExecutor,
 		/** Reloads the graph views once an action has changed the repository. */
 		private readonly onDidRun: () => void,
-		private readonly editing: RebaseEditing | null
+		private readonly editing: RebaseEditing | null,
+		/** Where every command an action runs, and its outcome, is written (#848). */
+		private readonly output: vscode.OutputChannel
 	) {}
 
 	/** Runs an action; resolves to null on success, or to the message to show. */
@@ -56,6 +58,7 @@ export class ActionRunner {
 			if (unsafe !== null) return unsafe;
 		}
 		if (action.kind === 'createPatch' || action.kind === 'applyPatch') return this.runPatch(repo, action);
+		if (action.kind === 'createArchive') return this.runArchive(repo, action);
 
 		const commands = planAction(action, actionOptions());
 		const needsEditor = commands.some((command) => command.editor === true);
@@ -83,7 +86,9 @@ export class ActionRunner {
 				async (_progress, token) => {
 					for (const command of commands) {
 						const env = command.editor === true ? this.editing!.bridge.environment() : undefined;
-						await this.git.run(repo, command.args, { token, ...(env !== undefined ? { env } : {}) });
+						this.log(repo, shellCommand('git', command.args, false));
+						const stdout = await this.git.run(repo, command.args, { token, ...(env !== undefined ? { env } : {}) });
+						if (stdout.trim() !== '') this.output.appendLine(indent(stdout));
 					}
 				}
 			);
@@ -91,6 +96,7 @@ export class ActionRunner {
 		} catch (error) {
 			if (error instanceof CancelledError) return `${title} was cancelled.`;
 			const message = error instanceof Error ? error.message : String(error);
+			this.output.appendLine(indent(`✗ ${message}`));
 			if (error instanceof GitError && network && isCredentialFailure(`${error.stderr}\n${message}`)) {
 				void this.offerTerminal(repo, error.args, message);
 				return `${message}\n\nGit needed credentials it could not ask for here. Use "Run in Terminal" in the notification, or set up a credential helper or ssh-agent.`;
@@ -164,6 +170,29 @@ export class ActionRunner {
 		}
 	}
 
+	/** Writes `git archive` of a commit to a file chosen in VS Code's save dialog. */
+	private async runArchive(repo: string, action: Extract<GitAction, { kind: 'createArchive' }>): Promise<string | null> {
+		const extension = action.format === 'zip' ? 'zip' : 'tar.gz';
+		const target = await vscode.window.showSaveDialog({
+			defaultUri: vscode.Uri.file(join(repo, `${basename(repo)}-${action.hash.slice(0, 8)}.${extension}`)),
+			filters: action.format === 'zip' ? { 'Zip archive': ['zip'] } : { 'Gzipped tar archive': ['tar.gz', 'tgz'] },
+			saveLabel: 'Create Archive'
+		});
+		if (target === undefined) return null;
+		const args = ['archive', `--format=${action.format === 'zip' ? 'zip' : 'tar.gz'}`, action.hash];
+		this.log(repo, `git ${args.join(' ')} > ${target.fsPath}`);
+		try {
+			await writeFile(target.fsPath, await this.git.runBinary(repo, args));
+			return null;
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	}
+
+	private log(repo: string, line: string): void {
+		this.output.appendLine(`[${new Date().toLocaleTimeString()}] ${basename(repo)}: ${line}`);
+	}
+
 	/** Offers to run the failed command where git can prompt for credentials. */
 	private async offerTerminal(repo: string, args: readonly string[], message: string): Promise<void> {
 		const choice = await vscode.window.showErrorMessage(message.split('\n')[0], 'Run in Terminal');
@@ -173,4 +202,9 @@ export class ActionRunner {
 		terminal.show();
 		terminal.sendText(shellCommand(this.git.binary, args, process.platform === 'win32'));
 	}
+}
+
+/** Indents git's output under the command that produced it. */
+function indent(text: string): string {
+	return text.trimEnd().split('\n').map((line) => `    ${line}`).join('\n');
 }

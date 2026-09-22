@@ -293,7 +293,7 @@ export class FilterControls {
 
 	private render(): void {
 		const selected = this.filter.branches;
-		const short = (ref: string) => ref.replace(/^refs\/(heads|remotes|tags)\//, '');
+		const short = (ref: string) => (ref === 'HEAD' ? 'Current Branch' : ref.replace(/^refs\/(heads|remotes|tags)\//, ''));
 		const hidden = this.filter.excludes.length;
 		this.branchButton.textContent =
 			(selected.length === 0 ? 'All Branches' : selected.length === 1 ? short(selected[0]) : `${selected.length} Branches`) +
@@ -333,6 +333,15 @@ export class FilterControls {
 		const fill = () => {
 			const needle = search.value.trim().toLowerCase();
 			const rows: HTMLElement[] = [this.branchRow('All Branches', this.filter.branches.length === 0, () => this.update({ branches: [] }))];
+			// Whatever is checked out, following checkouts (#753).
+			const headChecked = this.filter.branches.includes('HEAD');
+			if (needle === '' || 'current branch head'.includes(needle)) {
+				rows.push(
+					this.branchRow('Current Branch (HEAD)', headChecked, () =>
+						this.update({ branches: headChecked ? this.filter.branches.filter((r) => r !== 'HEAD') : [...this.filter.branches, 'HEAD'] })
+					)
+				);
+			}
 			let lastKind: BranchOption['kind'] | null = null;
 			let shown = 0;
 			let hidden = 0;

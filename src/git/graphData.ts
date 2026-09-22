@@ -3,7 +3,7 @@ import type { GitExecutor } from './executor.ts';
 import { GitLogReader, needsParentRewriting, refGlobArgs, type LogRequest } from './log.ts';
 import { GitRefReader, type RefsResult } from './refs.ts';
 import { rewriteParents } from '../graph/rewrite.ts';
-import { parseRemoteUrl, resolveIssueLinks, type IssueLinkSetting, type RemoteInfo } from './remote.ts';
+import { commitWebUrl, parseRemoteUrl, resolveIssueLinks, type IssueLinkSetting, type RemoteInfo } from './remote.ts';
 import { UNCOMMITTED, type Commit, type GraphData, type Hash, type LogFilter, type Stash } from '../types.ts';
 
 export interface GraphDataRequest {
@@ -122,7 +122,8 @@ export function existingBranches(selected: readonly string[], refs: RefsResult):
 		...refs.remoteHeads.map((remote) => `refs/remotes/${remote.name}`),
 		...refs.tags.map((tag) => `refs/tags/${tag.name}`)
 	]);
-	return selected.filter((ref) => known.has(ref));
+	// HEAD stands for whatever is checked out (#753), and always exists.
+	return selected.filter((ref) => ref === 'HEAD' || known.has(ref));
 }
 
 /**
@@ -211,6 +212,7 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 		moreAvailable: log.moreAvailable,
 		excludedRefs,
 		remotes,
+		commitUrlPrefix: remote === null ? null : commitWebUrl(remote, ''),
 		issueLinks: resolveIssueLinks(request.issueLinkSettings ?? [], request.issueLinkAutoDetect === true, remote),
 		notedCommits: commits.filter((commit) => noted.has(commit.hash)).map((commit) => commit.hash),
 		maxCommits: request.maxCommits

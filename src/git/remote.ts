@@ -60,6 +60,22 @@ export function parseRemoteUrl(url: string): RemoteInfo | null {
 	return { host, owner, repo, webUrl: `https://${host}/${owner}/${repo}` };
 }
 
+/**
+ * Plain web addresses in commit messages (#899). Trailing punctuation is left
+ * out, so "see https://example.com/x." links without the full stop.
+ */
+export const URL_RULE: IssueLinkRule = { pattern: 'https?://[^\\s<>"\'`]*[^\\s<>"\'`.,;:!?)\\]]', url: '$0' };
+
+/**
+ * The web page of a commit on the remote's host (#564). GitLab puts commits
+ * under `/-/commit/`, Bitbucket under `/commits/`; GitHub, Gitea, Forgejo and
+ * most others under `/commit/`.
+ */
+export function commitWebUrl(remote: RemoteInfo, hash: string): string {
+	const path = remote.host.includes('gitlab') ? '-/commit' : remote.host === 'bitbucket.org' ? 'commits' : 'commit';
+	return `${remote.webUrl}/${path}/${hash}`;
+}
+
 /** Links git hosts write themselves, so `#123` works with no configuration. */
 export function detectedRules(remote: RemoteInfo): IssueLinkSetting[] {
 	if (remote.host === 'github.com') {
@@ -95,7 +111,9 @@ export function resolveIssueLinks(settings: readonly IssueLinkSetting[], autoDet
 		});
 		if (!missing) rules.push({ pattern: setting.pattern, url });
 	}
-	return rules;
+	// Plain web addresses are always linked. Where an issue reference sits
+	// inside one (…/issues/12#34), the address wins: it starts first.
+	return [...rules, URL_RULE];
 }
 
 export interface TextSegment {

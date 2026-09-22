@@ -107,6 +107,8 @@ export interface TableCallbacks {
 	onOpenUrl(url: string): void;
 	/** A label was double-clicked: checking out a branch is the usual intent. */
 	onLabelDoubleClick(commit: Commit, label: RefLabel): void;
+	/** Rows were drawn whose authors' avatars are not known yet. */
+	onMissingAvatars(emails: readonly string[]): void;
 	/** A collapsed run's row was clicked (#387). */
 	onExpand(hash: Hash): void;
 	onScroll(scrollTop: number): void;
@@ -145,6 +147,8 @@ export class CommitTable {
 	 * single selection.
 	 */
 	private multi = new Set<Hash>();
+	/** Avatars by lower-case e-mail, when enabled; null = the author has none. */
+	private readonly avatars = new Map<string, string | null>();
 	/** The window currently in the DOM, to skip redundant redraws while scrolling. */
 	private drawn: { first: number; last: number } | null = null;
 	private frame = 0;
@@ -205,6 +209,13 @@ export class CommitTable {
 
 	get selectedHash(): Hash | null {
 		return this.selected;
+	}
+
+	/** Adds fetched avatars and redraws the rows that show them. */
+	setAvatars(avatars: Readonly<Record<string, string | null>>): void {
+		for (const [email, image] of Object.entries(avatars)) this.avatars.set(email, image);
+		this.drawn = null;
+		this.draw();
 	}
 
 	/** Marks search matches; null clears them. */
@@ -320,6 +331,14 @@ export class CommitTable {
 		});
 
 		if (range.last >= rowCount - LOAD_MORE_THRESHOLD) this.callbacks.onNearEnd();
+		if (model.config.avatars) {
+			const missing = new Set<string>();
+			for (let row = range.first; row <= range.last; row++) {
+				const email = model.data.commits[row]?.authorEmail.toLowerCase() ?? '';
+				if (email.includes('@') && !this.avatars.has(email)) missing.add(email);
+			}
+			if (missing.size > 0) this.callbacks.onMissingAvatars([...missing]);
+		}
 	}
 
 	/** The stand-in row for a collapsed run (#387): count, date range and authors. */
@@ -408,7 +427,15 @@ export class CommitTable {
 		element.appendChild(date);
 
 		const authorText = commit.hash === UNCOMMITTED || commit.stash !== null ? '' : commit.author;
-		const author = el('div', 'cell author', authorText);
+		const author = el('div', 'cell author');
+		const avatar = authorText !== '' && model.config.avatars ? this.avatars.get(commit.authorEmail.toLowerCase()) : undefined;
+		if (typeof avatar === 'string') {
+			const image = el('img', 'avatar');
+			image.src = avatar;
+			image.alt = '';
+			author.appendChild(image);
+		}
+		author.append(authorText);
 		if (authorText !== '') author.title = `${commit.author} <${commit.authorEmail}>`;
 		element.appendChild(author);
 

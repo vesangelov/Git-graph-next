@@ -100,6 +100,21 @@ export function validateAction(action: GitAction): void {
 			return ref(action.remote, 'remote');
 		case 'fetch':
 			return optionalRemote(action.remote);
+		case 'addRemote':
+		case 'setRemoteUrl':
+			ref(action.name, 'remote name');
+			return ref(action.url, 'remote URL');
+		case 'removeRemote':
+			return ref(action.name, 'remote');
+		case 'setUserConfig':
+			for (const value of [action.name, action.email]) {
+				if (typeof value !== 'string' || /[\0\n\r]/.test(value)) throw new InvalidActionError('Invalid user name or e-mail');
+			}
+			return;
+		case 'createArchive':
+			hash(action.hash);
+			if (action.format !== 'zip' && action.format !== 'tar.gz') throw new InvalidActionError('Invalid archive format');
+			return;
 		case 'pull':
 			if (!['merge', 'rebase', 'ff-only'].includes(action.mode)) throw new InvalidActionError('Invalid pull mode');
 			return;
@@ -236,11 +251,26 @@ export function planAction(action: GitAction, options: ActionOptions): GitComman
 				...(action.deleteOnRemote !== null ? [remote('push', action.deleteOnRemote, '--delete', `refs/tags/${action.name}`)] : [])
 			];
 		case 'pushTag':
-			return [remote('push', action.remote, `refs/tags/${action.name}`)];
+			return [remote('push', ...(action.force ? ['--force'] : []), action.remote, `refs/tags/${action.name}`)];
 		case 'fetch': {
 			const prune = action.prune ? ['--prune', ...(action.pruneTags ? ['--prune-tags'] : [])] : [];
-			return [remote('fetch', ...(action.remote === null ? ['--all'] : [action.remote]), ...prune)];
+			return [remote('fetch', ...(action.remote === null ? ['--all'] : [action.remote]), ...prune, ...(action.noTags ? ['--no-tags'] : []))];
 		}
+		case 'addRemote':
+			return [local('remote', 'add', action.name, action.url), ...(action.fetch ? [remote('fetch', action.name)] : [])];
+		case 'setRemoteUrl':
+			return [local('remote', 'set-url', action.name, action.url)];
+		case 'removeRemote':
+			return [local('remote', 'remove', action.name)];
+		case 'setUserConfig':
+			// An empty value removes the repository's own setting, so the global one applies again.
+			return [
+				action.name === '' ? local('config', '--local', '--unset-all', 'user.name') : local('config', '--local', 'user.name', action.name),
+				action.email === '' ? local('config', '--local', '--unset-all', 'user.email') : local('config', '--local', 'user.email', action.email)
+			];
+		case 'createArchive':
+			// File-based: the host asks where to write.
+			return [];
 		case 'pull':
 			return [remote('pull', action.mode === 'rebase' ? '--rebase' : action.mode === 'ff-only' ? '--ff-only' : '--no-rebase')];
 		case 'push': {
@@ -361,6 +391,16 @@ export function describeAction(action: GitAction): string {
 			return `Deleting tag ${action.name}`;
 		case 'pushTag':
 			return `Pushing tag ${action.name} to ${action.remote}`;
+		case 'addRemote':
+			return `Adding remote ${action.name}`;
+		case 'setRemoteUrl':
+			return `Changing the URL of ${action.name}`;
+		case 'removeRemote':
+			return `Removing remote ${action.name}`;
+		case 'setUserConfig':
+			return 'Setting the user for this repository';
+		case 'createArchive':
+			return `Creating an archive of ${action.hash.slice(0, 8)}`;
 		case 'fetch':
 			return action.remote === null ? 'Fetching from all remotes' : `Fetching from ${action.remote}`;
 		case 'pull':

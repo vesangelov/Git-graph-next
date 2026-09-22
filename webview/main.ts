@@ -1,6 +1,6 @@
 import { layoutGraph } from '../src/graph/layout.ts';
 import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GitAction, type GraphData, type Hash } from '../src/types.ts';
-import { NO_FILTER, completeFilter, isFiltered, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
+import { NO_FILTER, completeFilter, isFiltered, type ReviewSummary, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
 import { FilterControls } from './filters.ts';
 import { collapseRuns, runContaining } from '../src/graph/collapse.ts';
 import { escapeGlob, globMatches, resolveBranchColours, resolvePins } from './pins.ts';
@@ -16,6 +16,7 @@ import {
 	labelActions,
 	pendingOperationActions,
 	runNow,
+	repositorySettingsItems,
 	selectionActions,
 	type ActionContext
 } from './actionMenus.ts';
@@ -62,6 +63,8 @@ const state = {
 	compact: false,
 	/** Collapsed runs the user expanded, by first hash. Cleared on reload of another repo. */
 	expanded: new Set<Hash>(),
+	/** The active code review, whichever view started it. */
+	review: null as ReviewSummary | null,
 	/** Runs folded in the rows on screen, by stand-in hash. */
 	runs: new Map<Hash, readonly Commit[]>() as ReadonlyMap<Hash, readonly Commit[]>
 };
@@ -140,7 +143,7 @@ fetchButton.title = 'Fetch from remotes (right-click for options)';
 fetchButton.addEventListener('click', () => {
 	const ctx = actionContext();
 	if (ctx === null || ctx.data.remotes.length === 0) return;
-	void runNow(ctx, { kind: 'fetch', remote: null, prune: ctx.config.fetchAndPrune, pruneTags: ctx.config.fetchAndPrune && ctx.config.fetchAndPruneTags }, 'Fetch');
+	void runNow(ctx, { kind: 'fetch', remote: null, prune: ctx.config.fetchAndPrune, pruneTags: ctx.config.fetchAndPrune && ctx.config.fetchAndPruneTags, noTags: false }, 'Fetch');
 });
 fetchButton.addEventListener('contextmenu', (event) => {
 	event.preventDefault();
@@ -157,8 +160,19 @@ moreButton.addEventListener('click', () => {
 	menu.open(rect.left, rect.bottom + 2, [
 		{ label: 'Fetch…', action: () => fetchDialog(ctx), disabled: ctx.data.remotes.length === 0 },
 		{ label: 'Apply Patch…', action: () => applyPatchDialog(ctx) },
-		{ label: 'Delete Several Branches…', action: () => void deleteBranchesDialog(ctx) }
+		{ label: 'Delete Several Branches…', action: () => void deleteBranchesDialog(ctx) },
+		{ separator: true },
+		...repositorySettingsItems(ctx),
+		{ separator: true },
+		{ label: 'Show Git Output', action: () => post({ type: 'showOutput' }) }
 	]);
+});
+
+const headButton = el('button', 'icon-button filter-toggle', 'HEAD');
+headButton.title = 'Scroll to the checked-out commit';
+headButton.addEventListener('click', () => {
+	const head = state.data?.repo.headHash ?? null;
+	if (head !== null) revealCommit(head);
 });
 
 const compactButton = el('button', 'icon-button filter-toggle', 'Compact');
@@ -168,7 +182,7 @@ compactButton.addEventListener('click', () => toggleCompact());
 const searchButton = el('button', 'icon-button filter-toggle', 'Search');
 searchButton.title = 'Search commits (Ctrl+F)';
 
-toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, fetchButton, moreButton, compactButton, searchButton, filters.toggleButton, refreshButton);
+toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, headButton, fetchButton, moreButton, compactButton, searchButton, filters.toggleButton, refreshButton);
 
 /** Search state (#147). Matches are hashes in row order; `index` points at the current one. */
 const search = {
@@ -213,6 +227,7 @@ const table = new CommitTable({
 		if (state.config?.loadMoreCommitsAutomatically === true) loadMore();
 	},
 	onOpenUrl: (url) => post({ type: 'openUrl', url }),
+	onMissingAvatars: (emails) => requestAvatars(emails),
 	onLabelDoubleClick: (_commit, label) => {
 		const ctx = actionContext();
 		if (ctx === null || label.current) return;
@@ -241,7 +256,10 @@ const details = new DetailsPane({
 		state.detailsHeight = height;
 		persist();
 	},
-	onOpenUrl: (url) => post({ type: 'openUrl', url })
+	onOpenUrl: (url) => post({ type: 'openUrl', url }),
+	onOpenAllChanges: (target, title) => post({ type: 'openAllChanges', target, title }),
+	onStartReview: (target, title) => post({ type: 'review', command: 'start', target, title }),
+	onReview: (command) => post({ type: 'review', command })
 });
 if (state.detailsHeight !== null) details.setHeight(state.detailsHeight);
 
@@ -326,6 +344,27 @@ function setPins(pins: readonly string[]): void {
 	persist();
 	// Pinning is pure layout: redraw from the data already loaded.
 	if (state.data !== null) showGraph(state.data);
+}
+
+// ---- Avatars ----------------------------------------------------------------
+
+/** Addresses asked for and not answered yet, so scrolling does not ask twice. */
+const avatarRequests = new Set<string>();
+let avatarTimer = 0;
+let avatarQueue: string[] = [];
+
+/** Collects the addresses drawn rows need, and asks for them in one message. */
+function requestAvatars(emails: readonly string[]): void {
+	for (const email of emails) {
+		if (avatarRequests.has(email)) continue;
+		avatarRequests.add(email);
+		avatarQueue.push(email);
+	}
+	window.clearTimeout(avatarTimer);
+	avatarTimer = window.setTimeout(() => {
+		if (avatarQueue.length > 0) post({ type: 'avatars', emails: avatarQueue });
+		avatarQueue = [];
+	}, 150);
 }
 
 // ---- Search ---------------------------------------------------------------
@@ -482,14 +521,27 @@ function labelsFor(commit: Commit): RefLabel[] {
 
 function fileMenuItems(target: ChangeTarget, change: FileChange): MenuItem[] {
 	const items: MenuItem[] = [{ label: 'Open Changes', action: () => post({ type: 'openDiff', target, change }) }];
-	if (change.type !== FileChangeType.Deleted) {
-		items.push({ label: 'Open File', action: () => post({ type: 'openFile', repo: target.repo, path: change.path }) });
+	const exists = change.type !== FileChangeType.Deleted;
+	if (exists) items.push({ label: 'Open File', action: () => post({ type: 'openFile', repo: target.repo, path: change.path }) });
+	if (exists && target.hash !== UNCOMMITTED) {
+		const revision = { repo: target.repo, hash: target.hash, path: change.path };
+		items.push(
+			{ label: 'Open File at This Revision', action: () => post({ type: 'openRevisionFile', ...revision, compare: false }) },
+			{ label: 'Compare with Working File', action: () => post({ type: 'openRevisionFile', ...revision, compare: true }) }
+		);
 	}
-	items.push(
-		{ separator: true },
-		{ label: 'Copy Relative Path', action: () => post({ type: 'copyToClipboard', text: change.path, label: 'path' }) }
-	);
+	const review = state.review;
+	if (review !== null && review.repo === target.repo && review.hash === target.hash && review.base === target.base) {
+		const done = review.reviewed.includes(change.path);
+		group(items, [{ label: done ? 'Mark as Not Reviewed' : 'Mark as Reviewed', action: () => post({ type: 'review', command: 'toggle', path: change.path }) }]);
+	}
+	group(items, [{ label: 'Copy Relative Path', action: () => post({ type: 'copyToClipboard', text: change.path, label: 'path' }) }]);
 	return items;
+}
+
+/** Code review of a commit (against its first parent) or of two commits (#756). */
+function reviewItem(target: ChangeTarget, title: string): MenuItem {
+	return { label: 'Start Code Review', action: () => post({ type: 'review', command: 'start', target, title }) };
 }
 
 /** Appends a group of items, separated from what came before. */
@@ -517,6 +569,17 @@ function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 
 	if (label !== null && label.kind !== 'note') {
 		if (ctx !== null) group(items, labelActions(ctx, label, commit));
+		const current = state.data?.repo.head ?? null;
+		if (state.repo !== null && (label.kind === 'head' || label.kind === 'remote') && !label.current) {
+			const repo = state.repo;
+			const against = current ?? 'HEAD';
+			group(items, [
+				{
+					label: `Review ${label.name} Against ${against}`,
+					action: () => post({ type: 'review', command: 'startBranch', repo, branch: label.name, against })
+				}
+			]);
+		}
 
 		const view: MenuItem[] = [];
 		if (label.kind === 'head' || label.kind === 'remote') {
@@ -541,6 +604,15 @@ function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 	}
 
 	if (ctx !== null) group(items, commitActions(ctx, commit));
+	if (state.repo !== null && commit.stash === null) {
+		const target = changeTarget(state.repo, commit);
+		const title = commit.hash === UNCOMMITTED ? 'Uncommitted changes' : `${shortHash(commit.hash)} ${commit.subject}`;
+		group(items, [
+			reviewItem(target, title),
+			{ label: 'Open All Changes', action: () => post({ type: 'openAllChanges', target, title }) },
+			{ label: 'Open External Directory Diff', action: () => post({ type: 'externalDiff', target }) }
+		]);
+	}
 	if (commit.hash === UNCOMMITTED) {
 		group(items, [{ label: 'Copy Summary', action: copy(commit.subject, 'summary') }]);
 		return items;
@@ -551,11 +623,21 @@ function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 			group(items, [{ label: `Filter by Author "${commit.author}"`, action: () => filters.update({ authors: [...current, commit.author] }) }]);
 		}
 	}
-	group(items, [
+	const message = commit.body === '' ? commit.subject : `${commit.subject}\n\n${commit.body}`;
+	const copies: MenuItem[] = [
 		{ label: 'Copy Commit Hash', action: copy(commit.hash, 'commit hash') },
 		{ label: 'Copy Short Hash', action: copy(commit.hash.slice(0, 8), 'short hash') },
-		{ label: 'Copy Commit Subject', action: copy(commit.subject, 'commit subject') }
-	]);
+		{ label: 'Copy Commit Subject', action: copy(commit.subject, 'commit subject') },
+		{ label: 'Copy Commit Message', action: copy(message, 'commit message') }
+	];
+	const web = state.data?.commitUrlPrefix ?? null;
+	if (web !== null && commit.stash === null) {
+		copies.push(
+			{ label: 'Copy Commit Link', action: copy(web + commit.hash, 'commit link') },
+			{ label: 'Open Commit in Browser', action: () => post({ type: 'openUrl', url: web + commit.hash }) }
+		);
+	}
+	group(items, copies);
 	return items;
 }
 
@@ -576,6 +658,17 @@ function runAction(repo: string, action: GitAction): Promise<string | null> {
 let queryRequests = 0;
 const queryReplies = new Map<number, (value: readonly string[] | null) => void>();
 
+/** Asks the host for information a dialog needs. */
+function ask(query: 'mergedBranches' | 'userConfig'): Promise<readonly string[] | null> {
+	const repo = state.repo;
+	if (repo === null) return Promise.resolve(null);
+	return new Promise((resolve) => {
+		const requestId = ++queryRequests;
+		queryReplies.set(requestId, resolve);
+		post({ type: 'query', requestId, repo, query });
+	});
+}
+
 function actionContext(): ActionContext | null {
 	const data = state.data;
 	const config = state.config;
@@ -586,19 +679,27 @@ function actionContext(): ActionContext | null {
 		config,
 		dialog,
 		run: (action) => runAction(repo, action),
-		mergedBranches: () =>
-			new Promise((resolve) => {
-				const requestId = ++queryRequests;
-				queryReplies.set(requestId, resolve);
-				post({ type: 'query', requestId, repo, query: 'mergedBranches' });
-			})
+		mergedBranches: () => ask('mergedBranches'),
+		query: (what) => ask(what)
 	};
 }
 
 /** The menu for a multi-selection (#182). */
 function selectionMenuItems(selection: readonly Commit[]): MenuItem[] {
 	const ctx = actionContext();
-	const items: MenuItem[] = ctx !== null ? selectionActions(ctx, selection) : [];
+	const items: MenuItem[] = [];
+	if (selection.length === 2 && state.repo !== null) {
+		const [newer, older] = selection;
+		const name = (c: Commit) => (c.hash === UNCOMMITTED ? 'working tree' : shortHash(c.hash));
+		const target = { repo: state.repo, hash: newer.hash, base: older.hash };
+		const title = `${name(older)} → ${name(newer)}`;
+		items.push(
+			reviewItem(target, title),
+			{ label: 'Open All Changes', action: () => post({ type: 'openAllChanges', target, title }) },
+			{ label: 'Open External Directory Diff', action: () => post({ type: 'externalDiff', target }) }
+		);
+	}
+	if (ctx !== null) group(items, selectionActions(ctx, selection));
 	const hashes = selection.filter((c) => c.hash !== UNCOMMITTED).map((c) => c.hash);
 	group(items, [{ label: `Copy ${hashes.length} Commit Hashes`, action: () => post({ type: 'copyToClipboard', text: hashes.join('\n'), label: 'commit hashes' }) }]);
 	return items;
@@ -859,6 +960,14 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 			updateSearchStatus();
 			return;
 		}
+		case 'avatars':
+			for (const email of Object.keys(msg.avatars)) avatarRequests.delete(email);
+			table.setAvatars(msg.avatars);
+			return;
+		case 'reviewState':
+			state.review = msg.review;
+			details.setReview(msg.review);
+			return;
 		case 'queryResult': {
 			const reply = queryReplies.get(msg.requestId);
 			queryReplies.delete(msg.requestId);

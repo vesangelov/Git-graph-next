@@ -81,6 +81,7 @@ function data(commits: Commit[], heads: [string, string][], remotes: [string, st
 		notedCommits: [],
 		issueLinks: [],
 		remotes: [],
+		commitUrlPrefix: null,
 		maxCommits: 100
 	};
 }

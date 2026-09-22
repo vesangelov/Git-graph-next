@@ -1,6 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { linkify, parseRemoteUrl, resolveIssueLinks } from '../src/git/remote.ts';
+import { createHash } from 'node:crypto';
+import { avatarUrl } from '../src/view/avatarUrl.ts';
+import { URL_RULE, commitWebUrl, linkify, parseRemoteUrl, resolveIssueLinks } from '../src/git/remote.ts';
 
 test('parses the remote URL forms git accepts', () => {
 	const expected = { host: 'github.com', owner: 'me', repo: 'proj', webUrl: 'https://github.com/me/proj' };
@@ -18,19 +20,19 @@ test('parses the remote URL forms git accepts', () => {
 
 test('detects GitHub and GitLab issue links, and fills variables into configured rules', () => {
 	const github = parseRemoteUrl('git@github.com:me/proj.git');
-	assert.deepEqual(resolveIssueLinks([], true, github), [{ pattern: '#(\\d+)\\b', url: 'https://github.com/me/proj/issues/$1' }]);
-	assert.deepEqual(resolveIssueLinks([], false, github), []);
+	assert.deepEqual(resolveIssueLinks([], true, github).slice(0, -1), [{ pattern: '#(\\d+)\\b', url: 'https://github.com/me/proj/issues/$1' }]);
+	assert.deepEqual(resolveIssueLinks([], false, github), [URL_RULE], 'plain web addresses are always linked');
 
 	const gitlab = parseRemoteUrl('https://gitlab.com/g/p');
-	assert.deepEqual(resolveIssueLinks([], true, gitlab).map((r) => r.url), ['https://gitlab.com/g/p/-/issues/$1', 'https://gitlab.com/g/p/-/merge_requests/$1']);
+	assert.deepEqual(resolveIssueLinks([], true, gitlab).slice(0, -1).map((r) => r.url), ['https://gitlab.com/g/p/-/issues/$1', 'https://gitlab.com/g/p/-/merge_requests/$1']);
 
 	const jira = { pattern: '([A-Z]+-\\d+)', url: 'https://jira.example.com/browse/$1' };
 	const perRepo = { pattern: 'PR (\\d+)', url: 'https://${host}/${owner}/${repo}/pull/$1' };
-	assert.deepEqual(resolveIssueLinks([jira, perRepo], false, github).map((r) => r.url), [
+	assert.deepEqual(resolveIssueLinks([jira, perRepo], false, github).slice(0, -1).map((r) => r.url), [
 		'https://jira.example.com/browse/$1',
 		'https://github.com/me/proj/pull/$1'
 	]);
-	assert.deepEqual(resolveIssueLinks([jira, perRepo], true, null).map((r) => r.url), ['https://jira.example.com/browse/$1'], 'rules needing a remote are dropped without one');
+	assert.deepEqual(resolveIssueLinks([jira, perRepo], true, null).slice(0, -1).map((r) => r.url), ['https://jira.example.com/browse/$1'], 'rules needing a remote are dropped without one');
 });
 
 test('links matches, earliest first, and never anything but http(s)', () => {
@@ -49,4 +51,24 @@ test('links matches, earliest first, and never anything but http(s)', () => {
 	]);
 	assert.deepEqual(linkify('plain', []), [{ text: 'plain' }]);
 	assert.deepEqual(linkify('', rules), [{ text: '' }]);
+});
+
+test('links plain web addresses without trailing punctuation, and builds commit pages per host', () => {
+	assert.deepEqual(linkify('See https://example.com/a?b=1#c. Done', [URL_RULE]), [
+		{ text: 'See ' },
+		{ text: 'https://example.com/a?b=1#c', url: 'https://example.com/a?b=1#c' },
+		{ text: '. Done' }
+	]);
+	assert.deepEqual(linkify('(https://x.test/y)', [URL_RULE])[1], { text: 'https://x.test/y', url: 'https://x.test/y' });
+	const hash = 'a'.repeat(40);
+	assert.equal(commitWebUrl(parseRemoteUrl('git@github.com:me/p.git')!, hash), `https://github.com/me/p/commit/${hash}`);
+	assert.equal(commitWebUrl(parseRemoteUrl('https://gitlab.com/g/p')!, hash), `https://gitlab.com/g/p/-/commit/${hash}`);
+	assert.equal(commitWebUrl(parseRemoteUrl('git@bitbucket.org:t/p.git')!, hash), `https://bitbucket.org/t/p/commits/${hash}`);
+});
+
+test('asks GitHub for no-reply addresses and Gravatar, by hash only, for the rest', () => {
+	assert.equal(avatarUrl('12345+Octo-Cat@users.noreply.github.com'), 'https://github.com/octo-cat.png?size=36');
+	const hash = createHash('md5').update('someone@example.com').digest('hex');
+	assert.equal(avatarUrl(' Someone@Example.COM '), `https://www.gravatar.com/avatar/${hash}?s=36&d=404`, 'normalised before hashing');
+	assert.ok(!avatarUrl('someone@example.com').includes('someone'), 'the address itself is never sent');
 });

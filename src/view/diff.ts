@@ -90,30 +90,89 @@ export class RevisionFileSystem implements vscode.FileSystemProvider {
 
 const short = (hash: string) => hash.slice(0, 8);
 
+/** The two sides of one file change, and a title naming both. */
+export interface ChangeSides {
+	/** Before the change; null when the file was added. */
+	readonly left: vscode.Uri | null;
+	/** After the change; null when the file was deleted. */
+	readonly right: vscode.Uri | null;
+	readonly title: string;
+}
+
 /**
- * Opens the diff of one file change. Commits compare `base` with the commit;
- * the Uncommitted Changes row compares HEAD with the working tree file itself,
- * so the right side is the real, editable document.
+ * The URIs a file change compares. Commits compare `base` with the commit;
+ * the Uncommitted Changes row compares with the working tree file itself, so
+ * the right side is the real, editable document.
  */
-export async function openChangeDiff(target: ChangeTarget, change: FileChange): Promise<void> {
+export function changeSides(target: ChangeTarget, change: FileChange): ChangeSides {
 	const oldPath = change.oldPath ?? change.path;
 	const isAdded = change.type === FileChangeType.Added || change.type === FileChangeType.Untracked;
 	const isDeleted = change.type === FileChangeType.Deleted;
 
-	const left = revisionUri(target.repo, isAdded || target.base === null ? '' : target.base, oldPath);
-	let right: vscode.Uri;
+	const left = isAdded || target.base === null ? null : revisionUri(target.repo, target.base, oldPath);
+	let right: vscode.Uri | null = null;
 	let rightLabel: string;
 	if (target.hash === UNCOMMITTED) {
-		right = isDeleted ? revisionUri(target.repo, '', change.path) : vscode.Uri.file(join(target.repo, change.path));
+		if (!isDeleted) right = vscode.Uri.file(join(target.repo, change.path));
 		rightLabel = 'Working Tree';
 	} else {
-		right = revisionUri(target.repo, isDeleted ? '' : target.hash, change.path);
+		if (!isDeleted) right = revisionUri(target.repo, target.hash, change.path);
 		rightLabel = short(target.hash);
 	}
-
 	const leftLabel = target.base === null ? 'Empty' : short(target.base);
 	const name = change.oldPath !== null ? `${basename(change.oldPath)} → ${basename(change.path)}` : basename(change.path);
-	await vscode.commands.executeCommand('vscode.diff', left, right, `${name} (${leftLabel} ↔ ${rightLabel})`, { preview: true });
+	return { left, right, title: `${name} (${leftLabel} ↔ ${rightLabel})` };
+}
+
+/** Opens the diff of one file change. */
+export async function openChangeDiff(target: ChangeTarget, change: FileChange): Promise<void> {
+	const { left, right, title } = changeSides(target, change);
+	// `vscode.diff` needs both sides: an absent one is shown empty.
+	const empty = (path: string) => revisionUri(target.repo, '', path);
+	await vscode.commands.executeCommand('vscode.diff', left ?? empty(change.oldPath ?? change.path), right ?? empty(change.path), title, { preview: true });
+}
+
+/** True when this VS Code has the multi-file changes editor (1.86+). */
+async function hasChangesEditor(): Promise<boolean> {
+	return (await vscode.commands.getCommands(true)).includes('vscode.changes');
+}
+
+/**
+ * Opens every changed file in one scrolling editor (#807, #841, #916), the
+ * quickest way to read a whole commit or comparison. Falls back to the first
+ * file's diff on VS Code builds without the changes editor.
+ */
+export async function openAllChanges(target: ChangeTarget, changes: readonly FileChange[], title: string): Promise<void> {
+	if (changes.length === 0) return;
+	if (!(await hasChangesEditor())) {
+		void vscode.window.showInformationMessage('This version of VS Code cannot show all changes in one editor; opening the first file.');
+		await openChangeDiff(target, changes[0]);
+		return;
+	}
+	const resources = changes.map((change) => {
+		const { left, right } = changeSides(target, change);
+		// The label URI names the entry; it is the file as it is after the change.
+		const label = right ?? left ?? vscode.Uri.file(join(target.repo, change.path));
+		return [label, left, right] as const;
+	});
+	await vscode.commands.executeCommand('vscode.changes', title, resources);
+}
+
+/** Opens a file as it was at a revision, read-only. */
+export async function openFileAtRevision(repo: string, hash: string, path: string): Promise<void> {
+	await vscode.window.showTextDocument(revisionUri(repo, hash, path), { preview: true });
+}
+
+/** Compares a file at a revision with its working tree version (editable). */
+export async function compareWithWorkingFile(repo: string, hash: string, path: string): Promise<void> {
+	const working = vscode.Uri.file(join(repo, path));
+	try {
+		await vscode.workspace.fs.stat(working);
+	} catch {
+		void vscode.window.showWarningMessage(`"${path}" does not exist in the working tree.`);
+		return;
+	}
+	await vscode.commands.executeCommand('vscode.diff', revisionUri(repo, hash, path), working, `${basename(path)} (${short(hash)} ↔ Working Tree)`, { preview: true });
 }
 
 /** Opens the working tree version of a file, if it still exists. */

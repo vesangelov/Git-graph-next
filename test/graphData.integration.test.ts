@@ -288,3 +288,15 @@ test('lists commits with git notes and reads a note', async () => {
 	commitFile(empty, 'a.txt', '1\n', 'x');
 	assert.deepEqual((await loadGraphData(git, empty, { ...request, showNotes: true })).notedCommits, [], 'a repository without notes is fine');
 });
+
+test('a carriage return in a commit message does not break the graph (issues #935, #880 of the original)', async () => {
+	const repo = initRepo(join(root, 'carriage-return'));
+	commitFile(repo, 'a.txt', '1\n', 'first');
+	writeFileSync(join(repo, 'a.txt'), '2\n');
+	fixture(repo, 'add', 'a.txt');
+	fixture(repo, 'commit', '-q', '--cleanup=verbatim', '-m', 'windows\r line\r\n\r\nbody\rwith CR');
+	commitFile(repo, 'a.txt', '3\n', 'last');
+	const data = await loadGraphData(git, repo, request);
+	assert.deepEqual(data.commits.map((c) => c.subject.replace(/\r/g, '⏎')), ['last', 'windows⏎ line', 'first']);
+	assert.equal(data.commits[1].parents[0], data.commits[2].hash, 'the records after it are still aligned');
+});

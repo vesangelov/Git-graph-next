@@ -8,6 +8,17 @@
  */
 import type { ChangeTarget, FileChange, GitAction, GraphData, Hash } from '../types.ts';
 
+/** The active code review, as the views draw it (see src/view/review.ts). */
+export interface ReviewSummary {
+	readonly repo: string;
+	readonly hash: Hash;
+	readonly base: Hash | null;
+	readonly title: string;
+	readonly total: number;
+	readonly reviewed: readonly string[];
+	readonly current: string | null;
+}
+
 /** Where the webview is shown: the editor-area panel, or the Activity Bar sidebar. */
 export type ViewMode = 'panel' | 'sidebar';
 
@@ -34,6 +45,8 @@ export interface ViewConfig {
 	readonly colourRows: boolean;
 	/** Draw tag labels at the right-hand end of the description. */
 	readonly tagsOnRight: boolean;
+	/** Show author avatars (opt-in: fetching them contacts Gravatar / GitHub). */
+	readonly avatars: boolean;
 	/** Defaults for the Fetch dialog. */
 	readonly fetchAndPrune: boolean;
 	readonly fetchAndPruneTags: boolean;
@@ -69,6 +82,10 @@ export type HostMessage =
 			readonly match: { readonly hash: Hash; readonly position: number } | null;
 			readonly error: string | null;
 	  }
+	/** Avatars by lower-case e-mail; null for an author who has none. */
+	| { readonly type: 'avatars'; readonly avatars: Readonly<Record<string, string | null>> }
+	/** The active code review, or null; sent whenever it changes. */
+	| { readonly type: 'reviewState'; readonly review: ReviewSummary | null }
 	/** The answer to a `query`; null when git could not answer. */
 	| { readonly type: 'queryResult'; readonly requestId: number; readonly value: readonly string[] | null }
 	/** The outcome of a `runAction`: null on success, else the message to show. */
@@ -135,8 +152,23 @@ export type WebviewMessage =
 	 * options the graph was loaded with.
 	 */
 	| { readonly type: 'searchHistory'; readonly requestId: number; readonly options: LoadOptions; readonly query: string; readonly fromPosition: number }
+	/** Code review mode: start one for a commit or comparison, or step through the active one. */
+	| { readonly type: 'review'; readonly command: 'start'; readonly target: ChangeTarget; readonly title: string }
+	| { readonly type: 'review'; readonly command: 'startBranch'; readonly repo: string; readonly branch: string; readonly against: string }
+	| { readonly type: 'review'; readonly command: 'next' | 'previous' | 'end' | 'openAll' }
+	| { readonly type: 'review'; readonly command: 'toggle'; readonly path: string }
+	/** Opens all of a commit's or comparison's changed files in one editor (#807). */
+	| { readonly type: 'openAllChanges'; readonly target: ChangeTarget; readonly title: string }
+	/** Opens a file as it was at a commit, or compares it with the working tree. */
+	| { readonly type: 'openRevisionFile'; readonly repo: string; readonly hash: Hash; readonly path: string; readonly compare: boolean }
 	/** Asks the host for information a dialog needs, e.g. which branches are merged (#184). */
-	| { readonly type: 'query'; readonly requestId: number; readonly repo: string; readonly query: 'mergedBranches' }
+	| { readonly type: 'query'; readonly requestId: number; readonly repo: string; readonly query: 'mergedBranches' | 'userConfig' }
+	/** `git difftool --dir-diff` for a commit or comparison, as the original offered. */
+	| { readonly type: 'externalDiff'; readonly target: ChangeTarget }
+	/** Asks for the avatars of these authors (only when avatars are enabled). */
+	| { readonly type: 'avatars'; readonly emails: readonly string[] }
+	/** Shows the log of git commands the actions ran (#848). */
+	| { readonly type: 'showOutput' }
 	/** Runs a write action (Phase 3). The host validates it again before running anything. */
 	| { readonly type: 'runAction'; readonly requestId: number; readonly repo: string; readonly action: GitAction }
 	/** Opens an issue link (#313) in the browser. The host accepts http(s) only. */

@@ -10,8 +10,12 @@ import type { RepoManager } from '../repoManager.ts';
 import { graphDataRequest, openToActiveEditorRepo, viewConfig } from '../config.ts';
 import type { ChangesService } from './changesView.ts';
 import type { ActionRunner } from './actions.ts';
-import { openChangeDiff, openWorkingFile } from './diff.ts';
+import { compareWithWorkingFile, openAllChanges, openChangeDiff, openFileAtRevision, openWorkingFile } from './diff.ts';
+import type { ReviewManager } from './review.ts';
+import type { AvatarService } from './avatars.ts';
 import type { FilterState, HostMessage, LoadOptions, ViewMode, WebviewMessage } from './protocol.ts';
+import { HASH, isSafeRefName, isValidTarget } from './validation.ts';
+import { UNCOMMITTED, type ChangeTarget } from '../types.ts';
 
 /**
  * A single file is followed across renames (#70). Folders cannot be: git's
@@ -37,6 +41,10 @@ export interface GraphServices {
 	readonly repos: RepoManager;
 	readonly changes: ChangesService;
 	readonly actions: ActionRunner;
+	readonly reviews: ReviewManager;
+	/** "Git Graph Next" in the Output panel: the git commands actions ran (#848). */
+	readonly output: vscode.OutputChannel;
+	readonly avatars: AvatarService;
 }
 
 /** The container a graph webview lives in: an editor panel or a sidebar view. */
@@ -98,6 +106,7 @@ export class GraphController implements vscode.Disposable {
 				if (host.visible && this.stale) this.reload();
 			}),
 			services.repos.onDidChange(() => this.postRepos(null)),
+			services.reviews.onDidChange(() => this.post({ type: 'reviewState', review: services.reviews.summary() })),
 			vscode.workspace.onDidChangeConfiguration((event) => {
 				if (!event.affectsConfiguration('git-graph-next')) return;
 				this.post({ type: 'config', config: viewConfig() });
@@ -178,6 +187,9 @@ export class GraphController implements vscode.Disposable {
 	}
 
 	private async receive(message: WebviewMessage): Promise<void> {
+		const known = this.services.repos.repositories.map((r) => r.path);
+		const target = 'target' in message ? message.target : undefined;
+		if (target !== undefined && !isValidTarget(target, known)) return;
 		switch (message.type) {
 			case 'ready':
 				this.ready = true;
@@ -185,6 +197,7 @@ export class GraphController implements vscode.Disposable {
 				// A repository requested by a command beats the one the webview remembers.
 				this.postRepos(this.pendingRepo ?? message.repo);
 				if (this.pendingFilter !== null) this.post({ type: 'setFilter', ...this.pendingFilter });
+				this.post({ type: 'reviewState', review: this.services.reviews.summary() });
 				this.pendingRepo = null;
 				this.pendingFilter = null;
 				break;
@@ -225,9 +238,15 @@ export class GraphController implements vscode.Disposable {
 				break;
 			}
 			case 'query': {
-				const known = this.services.repos.repositories.some((r) => r.path === message.repo);
-				const output = known ? await this.services.git.runOrNull(message.repo, ['branch', '--merged', 'HEAD', '--format=%(refname:short)']) : null;
-				const value = output === null ? null : output.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+				let value: string[] | null = null;
+				if (known.includes(message.repo) && message.query === 'mergedBranches') {
+					const output = await this.services.git.runOrNull(message.repo, ['branch', '--merged', 'HEAD', '--format=%(refname:short)']);
+					value = output === null ? null : output.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+				} else if (known.includes(message.repo) && message.query === 'userConfig') {
+					// The repository's own values only: empty means the global one applies.
+					const read = async (key: string) => ((await this.services.git.runOrNull(message.repo, ['config', '--local', '--get', key])) ?? '').trim();
+					value = [await read('user.name'), await read('user.email')];
+				}
 				this.post({ type: 'queryResult', requestId: message.requestId, value });
 				break;
 			}
@@ -237,6 +256,18 @@ export class GraphController implements vscode.Disposable {
 				this.post({ type: 'actionResult', requestId: message.requestId, error });
 				break;
 			}
+			case 'externalDiff':
+				void this.openExternalDiff(message.target);
+				break;
+			case 'avatars':
+				if (viewConfig().avatars && Array.isArray(message.emails)) {
+					const emails = message.emails.filter((e): e is string => typeof e === 'string').slice(0, 200);
+					this.post({ type: 'avatars', avatars: await this.services.avatars.get(emails) });
+				}
+				break;
+			case 'showOutput':
+				this.services.output.show(true);
+				break;
 			case 'openUrl': {
 				// The webview only makes http(s) links, but it is not trusted to.
 				const uri = vscode.Uri.parse(message.url, true);
@@ -245,7 +276,34 @@ export class GraphController implements vscode.Disposable {
 			}
 			case 'openDiff':
 				await openChangeDiff(message.target, message.change);
+				await this.services.reviews.markOpened(message.target, message.change.path);
 				break;
+			case 'openAllChanges': {
+				const changes = await this.services.changes.load(message.target);
+				await openAllChanges(message.target, changes, message.title);
+				break;
+			}
+			case 'openRevisionFile':
+				if (!known.includes(message.repo) || !HASH.test(message.hash)) return;
+				if (message.compare) await compareWithWorkingFile(message.repo, message.hash, message.path);
+				else await openFileAtRevision(message.repo, message.hash, message.path);
+				break;
+			case 'review': {
+				const reviews = this.services.reviews;
+				let error: string | null = null;
+				if (message.command === 'start') error = await reviews.start(message.target, message.title);
+				else if (message.command === 'startBranch') {
+					if (!known.includes(message.repo) || !isSafeRefName(message.branch) || !isSafeRefName(message.against)) return;
+					error = await reviews.startBranch(message.repo, message.branch, message.against);
+				}
+				else if (message.command === 'next') await reviews.next();
+				else if (message.command === 'previous') await reviews.previous();
+				else if (message.command === 'end') await reviews.end();
+				else if (message.command === 'openAll') await reviews.openAll();
+				else if (message.command === 'toggle') await reviews.toggle(message.path);
+				if (error !== null) void vscode.window.showWarningMessage(error);
+				break;
+			}
 			case 'openFile':
 				await openWorkingFile(message.repo, message.path);
 				break;
@@ -269,6 +327,35 @@ export class GraphController implements vscode.Disposable {
 		} catch (error) {
 			if (generation !== this.loadGeneration) return;
 			this.post({ type: 'error', repo: options.repo, message: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	/**
+	 * `git difftool --dir-diff` on a commit or comparison (the original's
+	 * "Open External Directory Diff"). Only with a graphical tool: a terminal
+	 * one such as vimdiff would open where nobody can see it and never return.
+	 * Not awaited or queued — the tool stays open as long as the user likes.
+	 */
+	private async openExternalDiff(target: ChangeTarget): Promise<void> {
+		const git = this.services.git;
+		const config = async (key: string) => ((await git.runOrNull(target.repo, ['config', '--get', key])) ?? '').trim();
+		const [guiTool, tool] = await Promise.all([config('diff.guitool'), config('diff.tool')]);
+		const terminalTools = ['vimdiff', 'vimdiff1', 'vimdiff2', 'vimdiff3', 'nvimdiff', 'emerge'];
+		if (guiTool === '' && (tool === '' || terminalTools.includes(tool))) {
+			void vscode.window.showWarningMessage(
+				'Open External Directory Diff needs a graphical diff tool. Set one with, for example: git config --global diff.guitool meld'
+			);
+			return;
+		}
+		// A root commit is compared with the empty tree, in this repository's hash format.
+		const base = target.base ?? (await git.run(target.repo, ['mktree'], { stdin: '' })).trim();
+		const range = target.hash === UNCOMMITTED ? [base] : [base, target.hash];
+		const args = ['difftool', '--dir-diff', '--no-prompt', ...(guiTool !== '' ? ['--gui'] : []), ...range];
+		this.services.output.appendLine(`[${new Date().toLocaleTimeString()}] git ${args.join(' ')}`);
+		try {
+			await git.run(target.repo, args);
+		} catch (error) {
+			void vscode.window.showErrorMessage(`The external diff failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 

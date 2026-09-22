@@ -1211,3 +1211,70 @@ body.mode-sidebar {
 .right-labels .label:last-child {
 	margin-right: 0;
 }
+
+/* ---- Code review (#756) and quick compare ----------------------------- */
+
+.details-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+}
+
+.details-button {
+	font: inherit;
+	font-size: 0.92em;
+	padding: 1px 10px;
+	border-radius: 2px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	background: var(--vscode-button-secondaryBackground, transparent);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.details-button.primary {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+}
+
+.details-button:hover {
+	filter: brightness(1.15);
+}
+
+.review-progress {
+	color: var(--vscode-descriptionForeground);
+	white-space: nowrap;
+	font-size: 0.92em;
+}
+
+.review-progress.done {
+	color: var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-foreground));
+}
+
+.file.reviewed .file-name,
+.file.reviewed .file-dir,
+.file.reviewed .file-stats {
+	opacity: 0.55;
+}
+
+.file.reviewed .file-name::after {
+	content: ' ✓';
+	color: var(--vscode-gitDecoration-addedResourceForeground, inherit);
+	opacity: 1;
+}
+
+.file.current {
+	background: var(--vscode-list-inactiveSelectionBackground);
+}
+
+/* ---- Avatars (opt-in) -------------------------------------------------- */
+
+.avatar {
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	vertical-align: middle;
+	margin: -2px 6px 0 0;
+	object-fit: cover;
+}

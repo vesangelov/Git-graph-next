@@ -7,6 +7,8 @@ import { GraphController, type GraphServices } from './view/controller.ts';
 import { GraphSidebarProvider, SIDEBAR_VIEW_ID } from './view/sidebar.ts';
 import { ChangeItem, ChangesService } from './view/changesView.ts';
 import { ActionRunner, type RebaseEditing } from './view/actions.ts';
+import { ReviewManager } from './view/review.ts';
+import { AvatarService } from './view/avatars.ts';
 import { RebaseEditor } from './view/rebaseEditor.ts';
 import { EditorBridge } from './git/editorBridge.ts';
 import { REVISION_SCHEME, RevisionFileSystem, openChangeDiff, openWorkingFile } from './view/diff.ts';
@@ -51,8 +53,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		editing = null;
 	}
 	context.subscriptions.push(rebaseEditor);
-	const actions = new ActionRunner(git, () => GraphController.refreshAll(), editing);
-	const services: GraphServices = { extensionUri: context.extensionUri, git, repos, changes, actions };
+	const output = vscode.window.createOutputChannel('Git Graph Next');
+	context.subscriptions.push(output);
+	const actions = new ActionRunner(git, () => GraphController.refreshAll(), editing, output);
+	const reviews = new ReviewManager(context.workspaceState, git, changes);
+	changes.setReviewSource((target) => reviews.reviewedFor(target));
+	const avatars = new AvatarService(context.globalState);
+	const services: GraphServices = { extensionUri: context.extensionUri, git, repos, changes, actions, reviews, output, avatars };
 	const sidebar = new GraphSidebarProvider(services);
 	context.subscriptions.push(repos, changes, sidebar, { dispose: () => GraphPanel.disposeCurrent() });
 
@@ -98,8 +105,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		// Changes view items. Invoked with the clicked item as the argument.
-		vscode.commands.registerCommand('gitGraphNext.openChangeDiff', (item?: ChangeItem) => {
-			if (item instanceof ChangeItem) return openChangeDiff(item.target, item.change);
+		reviews,
+		reviews.onDidChange(() => changes.refresh()),
+		vscode.commands.registerCommand('gitGraphNext.clearAvatarCache', async () => {
+			await avatars.clear();
+			GraphController.refreshAll();
+			void vscode.window.showInformationMessage('The avatar cache was cleared.');
+		}),
+		vscode.commands.registerCommand('gitGraphNext.review.next', () => reviews.next()),
+		vscode.commands.registerCommand('gitGraphNext.review.previous', () => reviews.previous()),
+		vscode.commands.registerCommand('gitGraphNext.review.openAll', () => reviews.openAll()),
+		vscode.commands.registerCommand('gitGraphNext.review.end', () => reviews.end()),
+		vscode.commands.registerCommand('gitGraphNext.resumeWorkspaceCodeReview', () => reviews.resume()),
+		vscode.commands.registerCommand('gitGraphNext.endAllWorkspaceCodeReviews', () => reviews.endAll()),
+		vscode.commands.registerCommand('gitGraphNext.openChangeDiff', async (item?: ChangeItem) => {
+			if (!(item instanceof ChangeItem)) return;
+			await openChangeDiff(item.target, item.change);
+			await reviews.markOpened(item.target, item.change.path);
 		}),
 		vscode.commands.registerCommand('gitGraphNext.openChangeFile', (item?: ChangeItem) => {
 			if (item instanceof ChangeItem) return openWorkingFile(item.target.repo, item.change.path);

@@ -24,7 +24,9 @@ const STATUS: Record<FileChangeType, { label: string; colour: string }> = {
 export class ChangeItem extends vscode.TreeItem {
 	constructor(
 		readonly target: ChangeTarget,
-		readonly change: FileChange
+		readonly change: FileChange,
+		/** Already looked at in the active code review. */
+		reviewed = false
 	) {
 		super(vscode.Uri.from({ scheme: CHANGE_SCHEME, path: `/${change.path}`, query: change.type }));
 		const dir = posix.dirname(change.path);
@@ -33,8 +35,8 @@ export class ChangeItem extends vscode.TreeItem {
 		if (change.oldPath !== null) parts.push(`← ${posix.basename(change.oldPath)}`);
 		if (change.additions !== null && change.deletions !== null) parts.push(`+${change.additions} −${change.deletions}`);
 		this.label = posix.basename(change.path);
-		this.description = parts.join('  ');
-		this.tooltip = `${change.path}${change.oldPath !== null ? `\nRenamed from ${change.oldPath}` : ''}\n${STATUS[change.type].label}`;
+		this.description = `${reviewed ? '✓ ' : ''}${parts.join('  ')}`;
+		this.tooltip = `${change.path}${change.oldPath !== null ? `\nRenamed from ${change.oldPath}` : ''}\n${STATUS[change.type].label}${reviewed ? '\nReviewed' : ''}`;
 		this.contextValue = change.type === FileChangeType.Deleted ? 'change.deleted' : 'change';
 		this.command = { command: 'gitGraphNext.openChangeDiff', title: 'Open Changes', arguments: [this] };
 	}
@@ -65,6 +67,9 @@ export class ChangesService implements vscode.TreeDataProvider<ChangeItem>, vsco
 	private readonly cache = new Map<string, readonly FileChange[]>();
 	private items: ChangeItem[] = [];
 	private generation = 0;
+	/** What the view shows, so a review's progress can be redrawn on it. */
+	private shown: { target: ChangeTarget; changes: readonly FileChange[] } | null = null;
+	private reviewedFor: (target: ChangeTarget) => ReadonlySet<string> | null = () => null;
 
 	constructor(private readonly git: GitExecutor) {
 		this.treeView = vscode.window.createTreeView(CHANGES_VIEW_ID, { treeDataProvider: this, showCollapseAll: false });
@@ -104,7 +109,8 @@ export class ChangesService implements vscode.TreeDataProvider<ChangeItem>, vsco
 		try {
 			const changes = await this.load(target);
 			if (generation === this.generation) {
-				this.items = changes.map((change) => new ChangeItem(target, change));
+				this.shown = { target, changes };
+				this.items = this.buildItems();
 				this.treeView.message = changes.length === 0 ? 'This commit changes no files.' : undefined;
 				this.changed.fire();
 			}
@@ -117,6 +123,25 @@ export class ChangesService implements vscode.TreeDataProvider<ChangeItem>, vsco
 			}
 			throw error;
 		}
+	}
+
+	/** Connects code review progress (#756): reviewed files get a ✓. */
+	setReviewSource(reviewedFor: (target: ChangeTarget) => ReadonlySet<string> | null): void {
+		this.reviewedFor = reviewedFor;
+	}
+
+	/** Redraws the items, e.g. after review progress changed. */
+	refresh(): void {
+		if (this.shown === null) return;
+		this.items = this.buildItems();
+		this.changed.fire();
+	}
+
+	private buildItems(): ChangeItem[] {
+		if (this.shown === null) return [];
+		const { target, changes } = this.shown;
+		const reviewed = this.reviewedFor(target);
+		return changes.map((change) => new ChangeItem(target, change, reviewed?.has(change.path) === true));
 	}
 
 	dispose(): void {

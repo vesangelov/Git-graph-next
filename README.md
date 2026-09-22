@@ -36,6 +36,13 @@ Open the graph from the **Git Graph Next** icon in the Activity Bar, the **Git G
 - **Hide** branches and tags by pattern (`dependabot/*`, `nightly-*`).
 - **View File History** from the Explorer or the editor: the graph filtered to one file, followed across renames.
 
+### Review and compare
+
+- **Code review**: start one on a commit, on two selected commits, or on a branch against the current one (everything since they forked, as a pull request shows it). Every file you open is marked reviewed; **Alt+]** and **Alt+[** go to the next and previous file not yet reviewed, right from the diff editor. Reviews are kept per workspace and can be resumed after a restart.
+- **All Changes** opens every changed file of a commit or comparison in one scrolling editor.
+- **Select two commits** to compare them; open a file as it was at a commit, or compare it with your working copy.
+- **Open External Directory Diff** in your graphical diff tool (`diff.guitool`).
+
 ### Act on it
 
 ![The context menu of a branch](media/screenshots/menu.png)
@@ -47,9 +54,12 @@ Open the graph from the **Git Graph Next** icon in the Activity Bar, the **Git G
 - **Fixup commits** and **autosquash**, straight from the commit you want to fix.
 - **Stashes**: apply, pop, drop, or turn into a branch.
 - **Patches**: create them from commits or uncommitted changes, and apply them to the working tree or as commits.
+- **Archives**: save the files of any commit as `.zip` or `.tar.gz`.
+- **Repository settings**: add, change and remove remotes; set the user name and e-mail for one repository.
+- Copy a commit's link, or open it on GitHub, GitLab or Bitbucket.
 - When a merge, rebase, cherry-pick or revert stops at a conflict, a banner offers **Continue** and **Abort**.
 
-Every action shows exactly what it will do before it runs, and destructive ones are marked as such. When git needs a password it cannot ask for here, you are offered to run the same command in a terminal.
+Every action shows exactly what it will do before it runs, and destructive ones are marked as such. When git needs a password it cannot ask for here, you are offered to run the same command in a terminal. **Show Git Output** (in **More**) lists every git command the actions ran.
 
 ## Settings
 
@@ -66,6 +76,7 @@ All settings are under **Git Graph Next** in the Settings editor. The ones most 
 | `git-graph-next.maxCommits` | How many commits load at first (more load as you scroll). |
 | `git-graph-next.commitOrdering` | `date`, `author-date` or `topological`. |
 | `git-graph-next.repository.sign.commits` / `.sign.tags` | Sign what the graph creates. |
+| `git-graph-next.fetchAvatars` | Show author avatars (off by default — see Privacy). |
 
 ## Performance
 
@@ -83,7 +94,7 @@ git commit-graph write --reachable
 
 ## Privacy
 
-Git Graph Next collects no data and sends nothing anywhere. It talks to the network only when you fetch, pull or push, through your own git.
+Git Graph Next collects no data. It talks to the network only when you fetch, pull or push, through your own git — and, if you turn on `git-graph-next.fetchAvatars`, to fetch avatars: for each author shown, the MD5 hash of their e-mail address is sent to Gravatar (or their user name to GitHub, for GitHub no-reply addresses). Avatars are off by default.
 
 ## About
 
