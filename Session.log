@@ -54,6 +54,10 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | Issue links (#313) | Auto-detected GitHub (`#n`) / GitLab (`#n`, `!n`) rules from the origin remote + configurable rules with `$1…` and `${host}/${owner}/${repo}/${repoUrl}`; host opens http(s) only | One global rule can serve every repo (asked for in the issue's comments). |
 | Branch colours (#254) | `graph.branchColours` (pattern → colour, fixed along first-parent history) + opt-in `graph.colourCommitRows` stripe | Default look unchanged unless enabled. |
 | Compact mode (#387) | Fold runs of ≥3 adjacent commits with one parent, one child, no label, not HEAD / match / selected into a stand-in row that keeps the first hash (so no edge rewriting); click expands | Shows the branch structure but keeps the hidden commit count visible. Adjacent-row runs only: in date order an interleaved chain folds less than in topological order. |
+| Write actions (Phase 3) | Typed `GitAction` union → `validateAction` (nothing may start with `-`, hashes are 40-hex, stashes `stash@{n}`) → `git check-ref-format` for new names → `planAction` (exact argv, `--` after revisions) → `ActionRunner` (per-repo queue, progress, refresh) | The webview builds actions but is not trusted to have built them correctly. |
+| Action UI | Own dialogs in the webview; errors stay in the dialog | A mistyped name can be fixed in place. Destructive actions are marked (warning border, red button). |
+| Credentials | Prompts stay disabled; on a credential failure the host offers "Run in Terminal" with the same command (shell-quoted) | A hidden prompt would hang forever; the terminal can prompt. |
+| Webview testing | `test/webview.smoke.test.ts` boots the real webview in jsdom and drives it with host messages | Added in session 8: the UI had grown too large to rely on the type checker and live checks alone. |
 | Filter scope | Per repository, persisted in the panel's webview state; the sidebar never filters | Keeps the sidebar a quick overview. |
 | Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
 | Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
@@ -199,9 +203,31 @@ packaged and installed.** Awaiting live verification. **Phase 2 complete.**
 Known gap: the webview code has no automated test that runs it (only the
 type checker and the pure modules it imports); the live check covers it.
 
+Session 8 — Phase 3 foundation and the basic actions. **114/114 tests pass,
+`tsc --noEmit` clean, packaged and installed.** Awaiting live verification.
+
+- `src/git/actions.ts`: `validateAction`, `checkRefNames`, `planAction`,
+  `describeAction`, `isCredentialFailure`, `shellCommand`.
+- `src/view/actions.ts`: `ActionRunner`.
+- `webview/dialog.ts`, `webview/actionMenus.ts`; pending-operation banner;
+  toolbar Fetch (right-click: options); sidebar title Fetch; double-click a
+  branch label to check it out.
+- Actions: checkout (branch / detached / remote as tracking branch), create /
+  rename / delete branch (+ its remote copy), delete remote branch, create
+  (lightweight / annotated, optional push) / push / delete tag (+ on remote),
+  fetch (prune, prune tags), pull (merge / rebase / ff-only), push (upstream,
+  force-with-lease / force), merge (no-ff / squash / no-commit), rebase,
+  cherry-pick (-x, no-commit, mainline), revert (mainline), reset (soft /
+  mixed / hard), stash push / apply / pop / drop / branch, discard changes,
+  delete untracked files, continue / abort merge, rebase, cherry-pick,
+  revert, bisect (#519). Signing settings honoured.
+- Tests: `test/actions.integration.test.ts` (12, real repos incl. a bare
+  remote), `test/webview.smoke.test.ts` (6).
+
 ### Not started
 
-Phase 3 — write actions.
+Rest of Phase 3: #182 multi-commit operations, #410 fixup/squash, #113 /
+#757 / #587 interactive rebase, #184 delete several branches, #538 patches.
 
 ---
 
@@ -249,6 +275,10 @@ Verified empirically against git 2.53. These cost debugging time once already.
 12. **A branch named like a file is ambiguous** without a trailing `--`
     (`fatal: ambiguous argument`). Pass full ref names and always end
     revisions with `--`.
+13. **Some git failures are reported on stdout only.** A merge conflict
+    prints "CONFLICT … Automatic merge failed" to stdout with an empty
+    stderr; `GitExecutor.run` falls back to stdout for the error message, or
+    the user would see just "exited with code 1". Found by a test.
 
 ---
 
@@ -309,14 +339,14 @@ Structurally already supported by `LogFilter` / `layoutGraph`; they need UI.
 `GitRefReader.readState()` already detects interrupted operations, which is what
 makes the continue/abort affordances possible.
 
-- [ ] Checkout, branch create/delete/rename, merge, rebase, cherry-pick, revert,
+- [x] Checkout, branch create/delete/rename, merge, rebase, cherry-pick, revert,
       reset, stash apply/pop/drop, tag create/delete, push, pull, fetch.
 - [ ] #182 — multi-commit operations (select a range, act on it)
 - [ ] #410 — create fixup / squash, and autosquash, from the commit context menu
 - [ ] #113 — complete rebase support
 - [ ] #757 — interactive rebase driven from the VS Code editor
 - [ ] #587 — autosquash option in the rebase dialog
-- [ ] #519 — `merge --abort`
+- [x] #519 — `merge --abort`
 - [ ] #184 — delete several branches at once
 - [ ] #538 — create and apply patches
 
@@ -457,3 +487,19 @@ notebooks.
 with the read-safe foundation for write actions: a confirmation dialog in the
 webview, an action runner on the host that reports git errors, and the first
 actions (checkout, create/delete branch, create/delete tag, fetch).
+
+### Session 8 — 2026-09-22
+
+**Goal:** Phase 3 — the action framework and the basic write actions.
+
+The user verified Phase 2 on a large repository and committed it. Read #519,
+#182 and #184 first. Built the framework and all basic actions (see §3); every
+command form was tested against real git (fact 13 came out of those tests).
+Added a jsdom smoke test for the webview, which had been untested at run time.
+
+**Stopped at:** basic actions built, installed, awaiting the user's live check.
+
+**Next action:** fix whatever the live check finds; then multi-select
+(#182) as the base for multi-commit cherry-pick / revert, fixup / squash
+(#410), interactive rebase (#757, #113, #587), and deleting several branches
+(#184).

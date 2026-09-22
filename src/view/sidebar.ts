@@ -27,6 +27,10 @@ export class GraphSidebarProvider implements vscode.WebviewViewProvider, vscode.
 		});
 	}
 
+	openFetch(): void {
+		this.controller?.openFetch();
+	}
+
 	toggleCompact(): void {
 		this.controller?.toggleCompact();
 	}

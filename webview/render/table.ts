@@ -102,6 +102,8 @@ export interface TableCallbacks {
 	onContextMenu(event: MouseEvent, commit: Commit, label: RefLabel | null): void;
 	onNearEnd(): void;
 	onOpenUrl(url: string): void;
+	/** A label was double-clicked: checking out a branch is the usual intent. */
+	onLabelDoubleClick(commit: Commit, label: RefLabel): void;
 	/** A collapsed run's row was clicked (#387). */
 	onExpand(hash: Hash): void;
 	onScroll(scrollTop: number): void;
@@ -172,6 +174,10 @@ export class CommitTable {
 		new ResizeObserver(() => this.scheduleDraw()).observe(this.element);
 		this.rowsLayer.addEventListener('click', (event) => this.onRowEvent(event, false));
 		this.rowsLayer.addEventListener('contextmenu', (event) => this.onRowEvent(event, true));
+		this.rowsLayer.addEventListener('dblclick', (event) => {
+			const hit = this.rowFromEvent(event);
+			if (hit?.label != null) this.callbacks.onLabelDoubleClick(hit.commit, hit.label);
+		});
 		this.element.addEventListener('keydown', (event) => this.onKey(event));
 	}
 
@@ -250,7 +256,7 @@ export class CommitTable {
 
 	private scheduleDraw(): void {
 		if (this.frame !== 0) return;
-		this.frame = requestAnimationFrame(() => {
+		this.frame = window.requestAnimationFrame(() => {
 			this.frame = 0;
 			this.draw();
 		});

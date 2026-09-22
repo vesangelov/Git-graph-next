@@ -6,7 +6,7 @@
  * error rather than a silently ignored postMessage. Imported by both bundles;
  * it must stay free of `vscode` and Node imports.
  */
-import type { ChangeTarget, FileChange, GraphData, Hash } from '../types.ts';
+import type { ChangeTarget, FileChange, GitAction, GraphData, Hash } from '../types.ts';
 
 /** Where the webview is shown: the editor-area panel, or the Activity Bar sidebar. */
 export type ViewMode = 'panel' | 'sidebar';
@@ -32,6 +32,9 @@ export interface ViewConfig {
 	readonly branchColours: readonly (readonly [string, string])[];
 	/** Tint each commit row with its branch colour (#254). */
 	readonly colourRows: boolean;
+	/** Defaults for the Fetch dialog. */
+	readonly fetchAndPrune: boolean;
+	readonly fetchAndPruneTags: boolean;
 }
 
 export interface RepoOption {
@@ -52,6 +55,8 @@ export type HostMessage =
 	| { readonly type: 'graph'; readonly data: GraphData }
 	/** Switches compact mode (#387), from the sidebar's title bar. */
 	| { readonly type: 'toggleCompact' }
+	/** Opens the Fetch dialog, from the sidebar's title bar. */
+	| { readonly type: 'runFetch' }
 	/** Replaces parts of a repository's filter, e.g. from "View File History". Switches to that repository. */
 	| { readonly type: 'setFilter'; readonly repo: string; readonly filter: Partial<FilterState> }
 	| { readonly type: 'error'; readonly repo: string | null; readonly message: string }
@@ -62,6 +67,8 @@ export type HostMessage =
 			readonly match: { readonly hash: Hash; readonly position: number } | null;
 			readonly error: string | null;
 	  }
+	/** The outcome of a `runAction`: null on success, else the message to show. */
+	| { readonly type: 'actionResult'; readonly requestId: number; readonly error: string | null }
 	| {
 			readonly type: 'changes';
 			readonly repo: string;
@@ -124,6 +131,8 @@ export type WebviewMessage =
 	 * options the graph was loaded with.
 	 */
 	| { readonly type: 'searchHistory'; readonly requestId: number; readonly options: LoadOptions; readonly query: string; readonly fromPosition: number }
+	/** Runs a write action (Phase 3). The host validates it again before running anything. */
+	| { readonly type: 'runAction'; readonly requestId: number; readonly repo: string; readonly action: GitAction }
 	/** Opens an issue link (#313) in the browser. The host accepts http(s) only. */
 	| { readonly type: 'openUrl'; readonly url: string }
 	/** Opens the working-tree version of a repo-relative path. */

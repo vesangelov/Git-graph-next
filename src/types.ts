@@ -240,6 +240,8 @@ export interface GraphData {
 	readonly remoteHeadSymrefs: Readonly<Record<string, string>>;
 	/** True when `git log` had more commits than were requested. */
 	readonly moreAvailable: boolean;
+	/** Remote names, for the push / fetch / delete-on-remote choices. */
+	readonly remotes: readonly string[];
 	/** Issue-link rules for this repository (#313), `$n` still to be filled per match. */
 	readonly issueLinks: readonly { readonly pattern: string; readonly url: string }[];
 	/** Loaded commits that have a git note (#475). */
@@ -258,3 +260,45 @@ export const PendingOperation = {
 	Bisect: 'bisect'
 } as const;
 export type PendingOperation = (typeof PendingOperation)[keyof typeof PendingOperation];
+
+/**
+ * A write action on a repository (Phase 3). Built by the view, validated and
+ * run by the host; `planAction` turns each into exact git argument lists.
+ * Names of existing refs are short names (`main`, `origin/main`, `v1.0`).
+ */
+export type GitAction =
+	| { readonly kind: 'checkout'; readonly branch: string }
+	| { readonly kind: 'checkoutDetached'; readonly hash: Hash }
+	/** Creates a local branch tracking a remote branch, and checks it out. */
+	| { readonly kind: 'checkoutRemote'; readonly remoteBranch: string; readonly localName: string }
+	| { readonly kind: 'createBranch'; readonly name: string; readonly startPoint: Hash; readonly checkout: boolean; readonly force: boolean }
+	| { readonly kind: 'deleteBranch'; readonly name: string; readonly force: boolean; readonly deleteOnRemote: string | null }
+	| { readonly kind: 'renameBranch'; readonly from: string; readonly to: string }
+	| { readonly kind: 'deleteRemoteBranch'; readonly remote: string; readonly branch: string }
+	| { readonly kind: 'createTag'; readonly name: string; readonly target: Hash; readonly message: string | null; readonly force: boolean; readonly pushTo: string | null }
+	| { readonly kind: 'deleteTag'; readonly name: string; readonly deleteOnRemote: string | null }
+	| { readonly kind: 'pushTag'; readonly name: string; readonly remote: string }
+	| { readonly kind: 'fetch'; readonly remote: string | null; readonly prune: boolean; readonly pruneTags: boolean }
+	| { readonly kind: 'pull'; readonly mode: 'merge' | 'rebase' | 'ff-only' }
+	| {
+			readonly kind: 'push';
+			readonly branch: string;
+			readonly remote: string;
+			readonly setUpstream: boolean;
+			readonly force: 'none' | 'with-lease' | 'force';
+	  }
+	| { readonly kind: 'merge'; readonly ref: string; readonly noFastForward: boolean; readonly squash: boolean; readonly noCommit: boolean }
+	| { readonly kind: 'rebase'; readonly onto: string }
+	| { readonly kind: 'cherryPick'; readonly hash: Hash; readonly mainline: number | null; readonly noCommit: boolean; readonly recordOrigin: boolean }
+	| { readonly kind: 'revert'; readonly hash: Hash; readonly mainline: number | null }
+	| { readonly kind: 'reset'; readonly hash: Hash; readonly mode: 'soft' | 'mixed' | 'hard' }
+	| { readonly kind: 'stashPush'; readonly message: string; readonly includeUntracked: boolean }
+	| { readonly kind: 'stashApply'; readonly selector: string; readonly reinstateIndex: boolean }
+	| { readonly kind: 'stashPop'; readonly selector: string; readonly reinstateIndex: boolean }
+	| { readonly kind: 'stashDrop'; readonly selector: string }
+	| { readonly kind: 'stashBranch'; readonly selector: string; readonly name: string }
+	/** Discards uncommitted changes to tracked files (`reset --hard HEAD`). */
+	| { readonly kind: 'discardChanges' }
+	| { readonly kind: 'cleanUntracked'; readonly directories: boolean }
+	| { readonly kind: 'continueOperation'; readonly operation: PendingOperation }
+	| { readonly kind: 'abortOperation'; readonly operation: PendingOperation };

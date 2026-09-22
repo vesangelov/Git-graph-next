@@ -9,6 +9,7 @@ import { parseQuery } from '../search/query.ts';
 import type { RepoManager } from '../repoManager.ts';
 import { graphDataRequest, openToActiveEditorRepo, viewConfig } from '../config.ts';
 import type { ChangesService } from './changesView.ts';
+import type { ActionRunner } from './actions.ts';
 import { openChangeDiff, openWorkingFile } from './diff.ts';
 import type { FilterState, HostMessage, LoadOptions, ViewMode, WebviewMessage } from './protocol.ts';
 
@@ -35,6 +36,7 @@ export interface GraphServices {
 	readonly git: GitExecutor;
 	readonly repos: RepoManager;
 	readonly changes: ChangesService;
+	readonly actions: ActionRunner;
 }
 
 /** The container a graph webview lives in: an editor panel or a sidebar view. */
@@ -132,6 +134,11 @@ export class GraphController implements vscode.Disposable {
 		this.post({ type: 'toggleCompact' });
 	}
 
+	/** Opens the view's Fetch dialog. */
+	openFetch(): void {
+		this.post({ type: 'runFetch' });
+	}
+
 	reload(): void {
 		if (this.lastLoad === null) return;
 		if (!this.host.visible) {
@@ -215,6 +222,12 @@ export class GraphController implements vscode.Disposable {
 				} catch (error) {
 					this.post({ type: 'searchResult', requestId, match: null, error: error instanceof Error ? error.message : String(error) });
 				}
+				break;
+			}
+			case 'runAction': {
+				const known = this.services.repos.repositories.some((r) => r.path === message.repo);
+				const error = known ? await this.services.actions.run(message.repo, message.action) : `${message.repo} is not a known repository.`;
+				this.post({ type: 'actionResult', requestId: message.requestId, error });
 				break;
 			}
 			case 'openUrl': {

@@ -80,6 +80,7 @@ function data(commits: Commit[], heads: [string, string][], remotes: [string, st
 		excludedRefs,
 		notedCommits: [],
 		issueLinks: [],
+		remotes: [],
 		maxCommits: 100
 	};
 }

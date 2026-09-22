@@ -122,7 +122,11 @@ export class GitExecutor {
 	async run(cwd: string, args: readonly string[], options: RunOptions = {}): Promise<string> {
 		const result = await runRaw(this.binary, args, cwd, options);
 		if (result.code !== 0 && options.ignoreExitCode !== true) {
-			throw new GitError(cleanStderr(result.stderr) || `git exited with code ${result.code}`, result.code, args, result.stderr);
+			// Some failures are reported on stdout alone — a merge conflict's
+			// "CONFLICT … Automatic merge failed" is — so fall back to it rather
+			// than telling the user only the exit code.
+			const message = cleanStderr(result.stderr) || cleanStderr(result.stdout) || `git exited with code ${result.code}`;
+			throw new GitError(message, result.code, args, result.stderr);
 		}
 		return result.stdout;
 	}

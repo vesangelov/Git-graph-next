@@ -49,7 +49,7 @@ export class SearchBar {
 		this.input.placeholder = 'Search commits — e.g. fix author:alice tag:v1 after:2024-01-01';
 		this.input.spellcheck = false;
 		this.input.addEventListener('input', () => {
-			clearTimeout(this.inputTimer);
+			window.clearTimeout(this.inputTimer);
 			this.inputTimer = window.setTimeout(() => {
 				this.inputTimer = 0;
 				this.callbacks.onQuery(this.input.value);
@@ -103,7 +103,7 @@ export class SearchBar {
 	/** Runs a query whose debounce has not fired yet. */
 	flush(): void {
 		if (this.inputTimer === 0) return;
-		clearTimeout(this.inputTimer);
+		window.clearTimeout(this.inputTimer);
 		this.inputTimer = 0;
 		this.callbacks.onQuery(this.input.value);
 	}

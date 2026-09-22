@@ -59,6 +59,7 @@ function data(): GraphData {
 		excludedRefs: [],
 		notedCommits: [],
 		issueLinks: [],
+		remotes: [],
 		maxCommits: 100
 	};
 }

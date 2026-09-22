@@ -1,5 +1,5 @@
 import { layoutGraph } from '../src/graph/layout.ts';
-import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GraphData, type Hash } from '../src/types.ts';
+import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GitAction, type GraphData, type Hash } from '../src/types.ts';
 import { NO_FILTER, completeFilter, isFiltered, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
 import { FilterControls } from './filters.ts';
 import { collapseRuns, runContaining } from '../src/graph/collapse.ts';
@@ -7,6 +7,8 @@ import { escapeGlob, globMatches, resolveBranchColours, resolvePins } from './pi
 import { SearchBar, type SearchStatus } from './search.ts';
 import { highlightTerms, matchesQuery, parseQuery, type SearchQuery, type SearchRef } from '../src/search/query.ts';
 import { DetailsPane, changeTarget } from './details.ts';
+import { Dialog } from './dialog.ts';
+import { commitActions, fetchDialog, labelActions, pendingOperationActions, runNow, type ActionContext } from './actionMenus.ts';
 import { shortHash } from './format.ts';
 import { ContextMenu, type MenuItem } from './menu.ts';
 import { CommitTable, buildLabels, el, type RefLabel } from './render/table.ts';
@@ -77,7 +79,7 @@ function post(message: WebviewMessage): void {
 
 let saveTimer = 0;
 function persist(): void {
-	clearTimeout(saveTimer);
+	window.clearTimeout(saveTimer);
 	saveTimer = window.setTimeout(() => {
 		vscode.setState({
 			repo: state.repo,
@@ -118,9 +120,22 @@ const filters = new FilterControls({
 		if (state.repo === null) return;
 		state.filters[state.repo] = filter;
 		persist();
-		clearTimeout(filterTimer);
+		window.clearTimeout(filterTimer);
 		filterTimer = window.setTimeout(applyFilterChange, FILTER_DEBOUNCE_MS);
 	}
+});
+
+const fetchButton = el('button', 'icon-button filter-toggle', 'Fetch');
+fetchButton.title = 'Fetch from remotes (right-click for options)';
+fetchButton.addEventListener('click', () => {
+	const ctx = actionContext();
+	if (ctx === null || ctx.data.remotes.length === 0) return;
+	void runNow(ctx, { kind: 'fetch', remote: null, prune: ctx.config.fetchAndPrune, pruneTags: ctx.config.fetchAndPrune && ctx.config.fetchAndPruneTags }, 'Fetch');
+});
+fetchButton.addEventListener('contextmenu', (event) => {
+	event.preventDefault();
+	const ctx = actionContext();
+	if (ctx !== null) fetchDialog(ctx);
 });
 
 const compactButton = el('button', 'icon-button filter-toggle', 'Compact');
@@ -130,7 +145,7 @@ compactButton.addEventListener('click', () => toggleCompact());
 const searchButton = el('button', 'icon-button filter-toggle', 'Search');
 searchButton.title = 'Search commits (Ctrl+F)';
 
-toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, compactButton, searchButton, filters.toggleButton, refreshButton);
+toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, fetchButton, compactButton, searchButton, filters.toggleButton, refreshButton);
 
 /** Search state (#147). Matches are hashes in row order; `index` points at the current one. */
 const search = {
@@ -173,6 +188,15 @@ const table = new CommitTable({
 		if (state.config?.loadMoreCommitsAutomatically === true) loadMore();
 	},
 	onOpenUrl: (url) => post({ type: 'openUrl', url }),
+	onLabelDoubleClick: (_commit, label) => {
+		const ctx = actionContext();
+		if (ctx === null || label.current) return;
+		if (label.kind === 'head') void runNow(ctx, { kind: 'checkout', branch: label.name }, 'Checkout');
+		else if (label.kind === 'remote') {
+			const tracking = ctx.data.heads.find((h) => h.upstream === label.name);
+			if (tracking !== undefined) void runNow(ctx, { kind: 'checkout', branch: tracking.name }, 'Checkout');
+		}
+	},
 	onExpand: (hash) => {
 		state.expanded.add(hash);
 		drawGraph();
@@ -197,6 +221,9 @@ const details = new DetailsPane({
 if (state.detailsHeight !== null) details.setHeight(state.detailsHeight);
 
 const menu = new ContextMenu();
+const dialog = new Dialog();
+const pendingBanner = el('div', 'pending-banner');
+pendingBanner.hidden = true;
 document.body.classList.add(`mode-${mode}`);
 if (mode === 'sidebar') {
 	// The sidebar's title bar carries refresh; the toolbar keeps only the repo picker.
@@ -208,8 +235,9 @@ if (mode === 'sidebar') {
 	filters.bar.hidden = true;
 	searchButton.hidden = true;
 	compactButton.hidden = true;
+	fetchButton.hidden = true;
 }
-app.append(toolbar, filters.bar, searchBar.element, message, table.element, details.element, menu.element, filters.popupElement);
+app.append(toolbar, filters.bar, searchBar.element, pendingBanner, message, table.element, details.element, menu.element, filters.popupElement, dialog.element);
 if (mode === 'panel') filters.set(currentFilter());
 
 // ---- Behaviour ------------------------------------------------------------
@@ -411,7 +439,7 @@ function selectCommit(commit: Commit, toggle: boolean): void {
 	if (mode === 'panel') {
 		details.open(repo, commit, labelsFor(commit), state.data?.issueLinks ?? []);
 	}
-	clearTimeout(selectTimer);
+	window.clearTimeout(selectTimer);
 	selectTimer = window.setTimeout(() => {
 		const title = commit.hash === UNCOMMITTED ? commit.subject : `${shortHash(commit.hash)} ${commit.subject}`;
 		post({ type: 'selectCommit', target: changeTarget(repo, commit), title, hasNote: hasNote(commit.hash) });
@@ -438,6 +466,17 @@ function fileMenuItems(target: ChangeTarget, change: FileChange): MenuItem[] {
 	return items;
 }
 
+/** Appends a group of items, separated from what came before. */
+function group(items: MenuItem[], next: readonly MenuItem[]): void {
+	if (next.length === 0) return;
+	if (items.length > 0 && !('separator' in items[items.length - 1])) items.push({ separator: true });
+	items.push(...next);
+}
+
+/**
+ * The context menu. On a label: what can be done with that ref (git
+ * actions, then view options, then copying). On a row: the commit's actions.
+ */
 function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 	const run = state.runs.get(commit.hash);
 	if (run !== undefined) {
@@ -447,44 +486,98 @@ function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 		];
 	}
 	const copy = (text: string, what: string) => () => post({ type: 'copyToClipboard', text, label: what });
+	const ctx = actionContext();
 	const items: MenuItem[] = [];
-	if (label !== null) {
-		if (label.kind !== 'note') {
-			const what = { head: 'Branch Name', remote: 'Branch Name', tag: 'Tag Name', stash: 'Stash Name' }[label.kind];
-			items.push({ label: `Copy ${what}`, action: copy(label.name, what.toLowerCase()) }, { separator: true });
+
+	if (label !== null && label.kind !== 'note') {
+		if (ctx !== null) group(items, labelActions(ctx, label, commit));
+
+		const view: MenuItem[] = [];
+		if (label.kind === 'head' || label.kind === 'remote') {
+			const ref = label.kind === 'head' ? `refs/heads/${label.name}` : `refs/remotes/${label.name}`;
+			if (mode === 'panel') view.push({ label: 'Show Only This Branch', action: () => filters.update({ branches: [ref] }) });
+			const pinnedBySetting = state.config?.pinnedBranches.some((pattern) => globMatches(pattern, label.name)) === true;
+			if (currentPins().includes(label.name)) view.push({ label: 'Unpin from Own Column', action: () => setPins(currentPins().filter((n) => n !== label.name)) });
+			else if (!pinnedBySetting) view.push({ label: 'Pin to Own Column', action: () => setPins([...currentPins(), label.name]) });
 		}
+		if (mode === 'panel' && label.kind === 'tag') {
+			view.push({ label: 'Show Only This Tag', action: () => filters.update({ branches: [`refs/tags/${label.name}`] }) });
+		}
+		if (mode === 'panel' && (label.kind === 'head' || label.kind === 'remote' || label.kind === 'tag') && !label.current) {
+			const what = label.kind === 'tag' ? 'Tag' : 'Branch';
+			view.push({ label: `Hide This ${what}`, action: () => filters.update({ excludes: [...currentFilter().excludes, escapeGlob(label.name)] }) });
+		}
+		group(items, view);
+
+		const what = { head: 'Branch Name', remote: 'Branch Name', tag: 'Tag Name', stash: 'Stash Name' }[label.kind];
+		group(items, [{ label: `Copy ${what}`, action: copy(label.name, what.toLowerCase()) }]);
+		return items;
 	}
-	if (label !== null && (label.kind === 'head' || label.kind === 'remote')) {
-		const ref = label.kind === 'head' ? `refs/heads/${label.name}` : `refs/remotes/${label.name}`;
-		if (mode === 'panel') items.push({ label: 'Show Only This Branch', action: () => filters.update({ branches: [ref] }) });
-		const pinnedBySetting = state.config?.pinnedBranches.some((pattern) => globMatches(pattern, label.name)) === true;
-		if (currentPins().includes(label.name)) items.push({ label: 'Unpin from Own Column', action: () => setPins(currentPins().filter((n) => n !== label.name)) });
-		else if (!pinnedBySetting) items.push({ label: 'Pin to Own Column', action: () => setPins([...currentPins(), label.name]) });
-	}
-	if (mode === 'panel' && label !== null && label.kind === 'tag') {
-		items.push({ label: 'Show Only This Tag', action: () => filters.update({ branches: [`refs/tags/${label.name}`] }) });
-	}
-	if (mode === 'panel' && label !== null && (label.kind === 'head' || label.kind === 'remote' || label.kind === 'tag') && !label.current) {
-		const what = label.kind === 'tag' ? 'Tag' : 'Branch';
-		items.push({ label: `Hide This ${what}`, action: () => filters.update({ excludes: [...currentFilter().excludes, escapeGlob(label.name)] }) });
-	}
-	if (items.length > 0 && !('separator' in items[items.length - 1])) items.push({ separator: true });
+
+	if (ctx !== null) group(items, commitActions(ctx, commit));
 	if (commit.hash === UNCOMMITTED) {
-		items.push({ label: 'Copy Summary', action: copy(commit.subject, 'summary') });
+		group(items, [{ label: 'Copy Summary', action: copy(commit.subject, 'summary') }]);
 		return items;
 	}
 	if (mode === 'panel' && commit.stash === null && commit.author !== '') {
 		const current = currentFilter().authors;
 		if (!current.includes(commit.author)) {
-			items.push({ label: `Filter by Author "${commit.author}"`, action: () => filters.update({ authors: [...current, commit.author] }) }, { separator: true });
+			group(items, [{ label: `Filter by Author "${commit.author}"`, action: () => filters.update({ authors: [...current, commit.author] }) }]);
 		}
 	}
-	items.push(
+	group(items, [
 		{ label: 'Copy Commit Hash', action: copy(commit.hash, 'commit hash') },
 		{ label: 'Copy Short Hash', action: copy(commit.hash.slice(0, 8), 'short hash') },
 		{ label: 'Copy Commit Subject', action: copy(commit.subject, 'commit subject') }
-	);
+	]);
 	return items;
+}
+
+// ---- Actions (Phase 3) ------------------------------------------------------
+
+let actionRequests = 0;
+const actionReplies = new Map<number, (error: string | null) => void>();
+
+/** Sends an action to the host and resolves with its outcome. */
+function runAction(repo: string, action: GitAction): Promise<string | null> {
+	const requestId = ++actionRequests;
+	return new Promise((resolve) => {
+		actionReplies.set(requestId, resolve);
+		post({ type: 'runAction', requestId, repo, action });
+	});
+}
+
+function actionContext(): ActionContext | null {
+	const data = state.data;
+	const config = state.config;
+	const repo = state.repo;
+	if (data === null || config === null || repo === null || data.repo.path !== repo) return null;
+	return { data, config, dialog, run: (action) => runAction(repo, action) };
+}
+
+/** The banner for an interrupted merge, rebase, cherry-pick, revert or bisect (#519). */
+function renderPendingBanner(): void {
+	const data = state.data;
+	const ctx = actionContext();
+	const operation = data?.repo.pendingOperation ?? null;
+	if (ctx === null || operation === null) {
+		pendingBanner.hidden = true;
+		return;
+	}
+	const noun = { merge: 'A merge', rebase: 'A rebase', 'cherry-pick': 'A cherry-pick', revert: 'A revert', bisect: 'A bisect' }[operation];
+	const hint = operation === 'bisect' ? '' : ' Resolve any conflicts and stage the files, then continue — or abort to go back.';
+	const { continue: resume, abort } = pendingOperationActions(ctx, operation);
+	const buttons: HTMLElement[] = [];
+	if (resume !== null) {
+		const button = el('button', 'banner-button', 'Continue');
+		button.addEventListener('click', resume);
+		buttons.push(button);
+	}
+	const abortButton = el('button', 'banner-button secondary', 'Abort');
+	abortButton.addEventListener('click', abort);
+	buttons.push(abortButton);
+	pendingBanner.replaceChildren(el('span', 'banner-text', `${noun} is in progress.${hint}`), ...buttons);
+	pendingBanner.hidden = false;
 }
 
 // ---- Rendering ------------------------------------------------------------
@@ -556,6 +649,7 @@ function showGraph(data: GraphData): void {
 	table.element.hidden = data.commits.length === 0;
 	drawGraph();
 	syncDetails(data);
+	renderPendingBanner();
 	if (search.query !== null) runSearch(true);
 	if (state.restoreScrollTop !== null) {
 		table.scrollTop = state.restoreScrollTop;
@@ -697,6 +791,17 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 				request(Math.max(state.data.maxCommits, msg.match.position + 1 + state.config.loadMoreCommits));
 			}
 			updateSearchStatus();
+			return;
+		}
+		case 'actionResult': {
+			const reply = actionReplies.get(msg.requestId);
+			actionReplies.delete(msg.requestId);
+			reply?.(msg.error);
+			return;
+		}
+		case 'runFetch': {
+			const ctx = actionContext();
+			if (ctx !== null) fetchDialog(ctx);
 			return;
 		}
 		case 'changes':

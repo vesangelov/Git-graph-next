@@ -210,6 +210,7 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 		remoteHeadSymrefs: refs.remoteHeadSymrefs,
 		moreAvailable: log.moreAvailable,
 		excludedRefs,
+		remotes,
 		issueLinks: resolveIssueLinks(request.issueLinkSettings ?? [], request.issueLinkAutoDetect === true, remote),
 		notedCommits: commits.filter((commit) => noted.has(commit.hash)).map((commit) => commit.hash),
 		maxCommits: request.maxCommits

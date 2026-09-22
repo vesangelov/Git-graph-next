@@ -6,6 +6,7 @@ import { GraphPanel, VIEW_TYPE } from './view/panel.ts';
 import { GraphController, type GraphServices } from './view/controller.ts';
 import { GraphSidebarProvider, SIDEBAR_VIEW_ID } from './view/sidebar.ts';
 import { ChangeItem, ChangesService } from './view/changesView.ts';
+import { ActionRunner } from './view/actions.ts';
 import { REVISION_SCHEME, RevisionFileSystem, openChangeDiff, openWorkingFile } from './view/diff.ts';
 import { gitPathCandidates, retainContextWhenHidden, showStatusBarItem } from './config.ts';
 
@@ -36,7 +37,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	const repos = new RepoManager(git, context.workspaceState);
 	const changes = new ChangesService(git);
-	const services: GraphServices = { extensionUri: context.extensionUri, git, repos, changes };
+	const actions = new ActionRunner(git, () => GraphController.refreshAll());
+	const services: GraphServices = { extensionUri: context.extensionUri, git, repos, changes, actions };
 	const sidebar = new GraphSidebarProvider(services);
 	context.subscriptions.push(repos, changes, sidebar, { dispose: () => GraphPanel.disposeCurrent() });
 
@@ -61,6 +63,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 		vscode.commands.registerCommand('gitGraphNext.refresh', () => GraphController.refreshAll()),
 		vscode.commands.registerCommand('gitGraphNext.toggleCompact', () => sidebar.toggleCompact()),
+		vscode.commands.registerCommand('gitGraphNext.fetch', () => sidebar.openFetch()),
 
 		// History of a file or folder (#70): the Explorer passes the clicked
 		// resource, the editor title passes the document, the palette nothing.

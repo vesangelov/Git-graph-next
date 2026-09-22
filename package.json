@@ -100,6 +100,12 @@
         "title": "Toggle Compact Graph",
         "category": "Git Graph Next",
         "icon": "$(fold)"
+      },
+      {
+        "command": "gitGraphNext.fetch",
+        "title": "Fetch",
+        "category": "Git Graph Next",
+        "icon": "$(cloud-download)"
       }
     ],
     "menus": {
@@ -127,6 +133,10 @@
         {
           "command": "gitGraphNext.toggleCompact",
           "when": "false"
+        },
+        {
+          "command": "gitGraphNext.fetch",
+          "when": "false"
         }
       ],
       "scm/title": [
@@ -149,6 +159,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "gitGraphNext.fetch",
+          "when": "view == gitGraphNext.graphView",
+          "group": "navigation@0"
+        },
         {
           "command": "gitGraphNext.toggleCompact",
           "when": "view == gitGraphNext.graphView",
@@ -564,11 +579,13 @@
     "vsce:package": "npm run package && npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.24.0",
-    "typescript": "^5.7.0",
-    "@vscode/vsce": "^4.0.0"
+    "jsdom": "^26.1.0",
+    "typescript": "^5.7.0"
   },
   "repository": {
     "type": "git",

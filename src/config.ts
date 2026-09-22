@@ -4,6 +4,7 @@ import type { GraphDataRequest } from './git/graphData.ts';
 import { emptyFilter } from './types.ts';
 import { validateArgs } from './git/extraArgs.ts';
 import type { IssueLinkSetting } from './git/remote.ts';
+import type { ActionOptions } from './git/actions.ts';
 
 export const SECTION = 'git-graph-next';
 
@@ -60,7 +61,9 @@ export function viewConfig(): ViewConfig {
 		showTags: read('showTags', true),
 		pinnedBranches: stringList('graph.pinnedBranches'),
 		branchColours: branchColours(),
-		colourRows: read('graph.colourCommitRows', false)
+		colourRows: read('graph.colourCommitRows', false),
+		fetchAndPrune: read('repository.fetchAndPrune', false),
+		fetchAndPruneTags: read('repository.fetchAndPruneTags', false)
 	};
 }
 
@@ -82,6 +85,15 @@ export function showStatusBarItem(): boolean {
 
 export function showUntrackedFiles(): boolean {
 	return read('showUntrackedFiles', true);
+}
+
+/** Settings that shape the git commands of write actions. */
+export function actionOptions(): ActionOptions {
+	return { signCommits: read('repository.sign.commits', false), signTags: read('repository.sign.tags', false) };
+}
+
+export function integratedTerminalShell(): string {
+	return read('integratedTerminalShell', '').trim();
 }
 
 export function openToActiveEditorRepo(): boolean {

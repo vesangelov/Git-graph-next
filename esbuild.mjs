@@ -56,7 +56,9 @@ const testConfig = {
 	format: 'cjs',
 	platform: 'node',
 	target: 'node20',
-	sourcemap: 'inline'
+	sourcemap: 'inline',
+	// Test-only dependencies (jsdom) load from node_modules at run time.
+	packages: 'external'
 };
 
 if (tests) {
