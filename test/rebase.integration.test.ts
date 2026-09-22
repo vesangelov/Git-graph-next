@@ -11,6 +11,7 @@ import { EditorBridge } from '../src/git/editorBridge.ts';
 import { applyPatches, commitPatch, patchFileName, uncommittedPatch } from '../src/git/patches.ts';
 import { GitRefReader } from '../src/git/refs.ts';
 import { PendingOperation, type GitAction } from '../src/types.ts';
+import { gitEnv, gitRunEnv } from './support.ts';
 
 let root: string;
 let repo: string;
@@ -23,7 +24,7 @@ let onEdit: (file: string) => boolean = () => true;
 const prompts: string[] = [];
 const edited: string[] = [];
 const options = { signCommits: false, signTags: false };
-const env = { ...process.env, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+const env = gitEnv();
 
 const sh = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', env }).trim();
 const subjects = () => sh('log', '--format=%s').split('\n');
@@ -38,7 +39,7 @@ function commit(file: string, content: string, message: string): string {
 async function run(action: GitAction): Promise<void> {
 	validateAction(action);
 	for (const command of planAction(action, options)) {
-		await git.run(repo, command.args, { env: { GIT_CONFIG_GLOBAL: '/dev/null', ...(command.editor === true ? bridge.environment() : {}) } });
+		await git.run(repo, command.args, { env: gitRunEnv(command.editor === true ? bridge.environment() : {}) });
 	}
 }
 
@@ -65,7 +66,7 @@ const hashes: string[] = [];
 beforeEach(() => {
 	repo = mkdtempSync(join(root, 'repo-'));
 	sh('init', '-q', '-b', 'main');
-	for (const [k, v] of [['user.email', 't@e'], ['user.name', 'T'], ['commit.gpgsign', 'false']]) sh('config', k, v);
+	for (const [k, v] of [['user.email', 't@e'], ['user.name', 'T'], ['commit.gpgsign', 'false'], ['core.autocrlf', 'false']]) sh('config', k, v);
 	hashes.length = 0;
 	for (let i = 1; i <= 4; i++) hashes.push(commit(`f${i}.txt`, `${i}\n`, `c${i}`));
 	onEdit = () => true;
@@ -186,7 +187,7 @@ test('answers git\'s password prompts through VS Code, and leaves ssh an executa
 	const filled = await git.run(repo, ['credential', 'fill'], {
 		stdin: 'protocol=https\nhost=example.test\nusername=me\n\n',
 		// No helper, so git has nowhere to look but the askpass program.
-		env: { ...bridge.askpassEnvironment(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+		env: gitRunEnv(bridge.askpassEnvironment())
 	});
 	assert.match(filled, /^password=hunter2$/m, 'what the user typed reaches git');
 	assert.equal(prompts.length, 1, 'git asked exactly once');
@@ -195,6 +196,7 @@ test('answers git\'s password prompts through VS Code, and leaves ssh an executa
 	const askpass = bridge.askpassEnvironment().SSH_ASKPASS;
 	assert.equal(askpass, askpassScript);
 	assert.equal(bridge.askpassEnvironment().SSH_ASKPASS_REQUIRE, 'force');
+	if (process.platform === 'win32') return; // Windows has no execute bit, and runs the script through git's sh.
 	accessSync(askpass, constants.X_OK);
 	// Asynchronously: the bridge that answers runs in this process, so a
 	// blocking call here would wait for itself.

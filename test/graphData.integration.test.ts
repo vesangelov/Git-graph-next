@@ -9,6 +9,7 @@ import { countStatusEntries, insertStashes, loadGraphData, readNote, type GraphD
 import { dedupePaths, discoverRepositories, scanForNestedRepositories } from '../src/git/repository.ts';
 import { readChanges } from '../src/git/changes.ts';
 import { STAGED, UNCOMMITTED, emptyFilter, type Commit, type Stash } from '../src/types.ts';
+import { gitEnv, realPath } from './support.ts';
 
 let root: string;
 let git: GitExecutor;
@@ -17,7 +18,7 @@ function fixture(cwd: string, ...args: string[]): string {
 	return execFileSync('git', args, {
 		cwd,
 		encoding: 'utf8',
-		env: { ...process.env, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+		env: gitEnv()
 	});
 }
 
@@ -27,6 +28,7 @@ function initRepo(path: string): string {
 	fixture(path, 'config', 'user.email', 'test@example.com');
 	fixture(path, 'config', 'user.name', 'Test');
 	fixture(path, 'config', 'commit.gpgsign', 'false');
+	fixture(path, 'config', 'core.autocrlf', 'false');
 	return path;
 }
 
@@ -141,15 +143,16 @@ test('discovers the enclosing repository and nested ones within the depth limit'
 	initRepo(join(outer, 'node_modules', 'dep'));
 	mkdirSync(join(outer, 'plain'), { recursive: true });
 
+	// git reports resolved paths; on macOS the temporary directory is a symlink.
 	const shallow = await discoverRepositories(git, [outer], 1);
-	assert.deepEqual(shallow, [outer], 'depth 1 does not reach libs/inner');
+	assert.deepEqual(shallow, [realPath(outer)], 'depth 1 does not reach libs/inner');
 
 	const deep = await discoverRepositories(git, [outer], 2);
-	assert.deepEqual(deep, [outer, join(outer, 'libs', 'inner')], 'node_modules is never scanned');
+	assert.deepEqual(deep, [realPath(outer), realPath(join(outer, 'libs', 'inner'))], 'node_modules is never scanned');
 
 	// Opening a subfolder of a repository finds the repository it belongs to.
 	const fromSubfolder = await discoverRepositories(git, [join(outer, 'plain')], 0);
-	assert.deepEqual(fromSubfolder, [outer]);
+	assert.deepEqual(fromSubfolder, [realPath(outer)]);
 
 	assert.deepEqual(scanForNestedRepositories(outer, 0), []);
 	assert.deepEqual(await discoverRepositories(git, [join(root, 'does-not-exist')], 3), []);

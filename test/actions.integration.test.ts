@@ -8,13 +8,14 @@ import { GitExecutor } from '../src/git/executor.ts';
 import { checkRefNames, InvalidActionError, isCredentialFailure, planAction, shellCommand, validateAction } from '../src/git/actions.ts';
 import { GitRefReader } from '../src/git/refs.ts';
 import { PendingOperation, type GitAction } from '../src/types.ts';
+import { gitEnv, gitRunEnv } from './support.ts';
 
 let root: string;
 let repo: string;
 let origin: string;
 let git: GitExecutor;
 const options = { signCommits: false, signTags: false };
-const env = { ...process.env, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+const env = gitEnv();
 
 function sh(cwd: string, ...args: string[]): string {
 	return execFileSync('git', args, { cwd, encoding: 'utf8', env }).trim();
@@ -32,7 +33,7 @@ async function run(action: GitAction): Promise<void> {
 	validateAction(action);
 	const invalid = await checkRefNames(git, repo, action);
 	if (invalid !== null) throw new Error(invalid);
-	for (const command of planAction(action, options)) await git.run(repo, command.args, { env: { GIT_CONFIG_GLOBAL: '/dev/null' } });
+	for (const command of planAction(action, options)) await git.run(repo, command.args, { env: gitRunEnv() });
 }
 
 const head = () => sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
@@ -48,7 +49,7 @@ beforeEach(() => {
 	repo = join(root, 'work');
 	execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { env });
 	execFileSync('git', ['init', '-q', '-b', 'main', repo], { env });
-	for (const [k, v] of [['user.email', 't@e'], ['user.name', 'T'], ['commit.gpgsign', 'false'], ['tag.gpgsign', 'false']]) sh(repo, 'config', k, v);
+	for (const [k, v] of [['user.email', 't@e'], ['user.name', 'T'], ['commit.gpgsign', 'false'], ['tag.gpgsign', 'false'], ['core.autocrlf', 'false']]) sh(repo, 'config', k, v);
 	sh(repo, 'remote', 'add', 'origin', origin);
 	commit('a.txt', '1\n', 'one');
 	commit('a.txt', '2\n', 'two');

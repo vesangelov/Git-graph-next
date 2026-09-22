@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { GitExecutor } from '../src/git/executor.ts';
 import { emptySideContent, parseNameStatus, parseNumstat, readBlobAtRevision, readChanges } from '../src/git/changes.ts';
 import { UNCOMMITTED } from '../src/types.ts';
+import { gitEnv } from './support.ts';
 
 let repo: string;
 let git: GitExecutor;
@@ -16,7 +17,7 @@ function fixture(...args: string[]): string {
 	return execFileSync('git', args, {
 		cwd: repo,
 		encoding: 'utf8',
-		env: { ...process.env, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+		env: gitEnv()
 	});
 }
 
@@ -32,6 +33,7 @@ before(async () => {
 	fixture('config', 'user.email', 'test@example.com');
 	fixture('config', 'user.name', 'Test');
 	fixture('config', 'commit.gpgsign', 'false');
+	fixture('config', 'core.autocrlf', 'false');
 	// Hostile config: coloured output must not leak escape codes into paths.
 	fixture('config', 'color.ui', 'always');
 

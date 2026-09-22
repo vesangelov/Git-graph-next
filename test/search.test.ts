@@ -9,6 +9,7 @@ import { GitExecutor } from '../src/git/executor.ts';
 import { searchHistory } from '../src/git/search.ts';
 import type { GraphDataRequest } from '../src/git/graphData.ts';
 import { emptyFilter, type Commit } from '../src/types.ts';
+import { gitEnv } from './support.ts';
 
 function commit(partial: Partial<Commit>): Commit {
 	return {
@@ -86,7 +87,7 @@ function fixture(...args: string[]): string {
 	return execFileSync('git', args, {
 		cwd: repo,
 		encoding: 'utf8',
-		env: { ...process.env, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+		env: gitEnv()
 	});
 }
 
@@ -101,6 +102,7 @@ before(async () => {
 	fixture('config', 'user.email', 'test@example.com');
 	fixture('config', 'user.name', 'Test');
 	fixture('config', 'commit.gpgsign', 'false');
+	fixture('config', 'core.autocrlf', 'false');
 	// 30 commits, oldest first; a tag and an unusual author deep in history.
 	for (let i = 0; i < 30; i++) {
 		writeFileSync(join(repo, 'f.txt'), `${i}\n`);
@@ -109,7 +111,7 @@ before(async () => {
 		const date = `2020-01-${String(i + 1).padStart(2, '0')}T12:00:00`;
 		execFileSync('git', [...author, 'commit', '-q', '-m', i === 7 ? 'Fix the (legacy) importer' : `commit ${i}`], {
 			cwd: repo,
-			env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }
+			env: gitEnv({ GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date })
 		});
 		if (i === 5) fixture('tag', 'v0.1');
 	}

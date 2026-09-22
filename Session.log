@@ -260,7 +260,7 @@ decisions.
 - Icon (`media/icon.png`, 256 px), README with three screenshots rendered from
   the real webview bundle in headless Firefox (`media/screenshots/`, not
   shipped in the .vsix), CHANGELOG.
-- `.github/workflows/ci.yml` (Linux/macOS blocking, Windows reported only)
+- `.github/workflows/ci.yml` (all three platforms blocking since session 13)
   and `release.yml` (tag `v*` → Marketplace and Open VSX when the secrets
   exist, after checking the tag matches `package.json`).
 - Settings: `referenceLabels.alignment` implemented (tags on the right);
@@ -392,6 +392,18 @@ Verified empirically against git 2.53. These cost debugging time once already.
     a quoted command line fails with "cannot exec". It must be an executable
     file — a `.sh` on Unix, a `.bat` on Windows. `GIT_EDITOR` *is* run through
     a shell, so a command line works there.
+21. **Tests must neutralise git's machine configuration on every command,
+    theirs and the code's.** Windows CI has `core.autocrlf=true` in the system
+    config: the code under test wrote CRLF while the test's own commands read
+    with LF rules, so `reset --hard` looked like it had done nothing.
+    `/dev/null` is not a valid config path on Windows — use an empty file
+    (`test/support.ts`), and set `core.autocrlf=false` per test repository.
+22. **macOS temporary directories are reached through a symlink**
+    (`/var` → `/private/var`) and git reports the resolved path. Expected
+    paths in tests must be resolved the same way (`realPath`).
+23. **`git reset … --` is the "reset paths" form** with an empty pathspec.
+    Harmless on git 2.53, refused with `--hard` by older versions; the
+    trailing `--` was dropped (hashes there are validated already).
 
 ---
 
@@ -680,3 +692,22 @@ askpass work needed fact 20, found by a test that failed with "cannot exec".
 **Stopped at:** built, installed, awaiting the user's live check.
 
 **Next action:** publisher and repository decisions, then the first publish.
+
+### Session 13 — 2026-09-22
+
+**Goal:** make CI pass on macOS and Windows.
+
+The user reported both failing. macOS was a test that compared an unresolved
+temporary path with git's resolved one (fact 22). Windows was a test-harness
+fault that could have hidden a real one: the code under test ran with the
+machine's git configuration while the test's own commands did not, so
+`core.autocrlf` made a clean `reset --hard` look like a no-op (fact 21). All
+tests now share `test/support.ts`. The trailing `--` after `git reset` was
+dropped as well (fact 23), and the askpass helper is now one `.sh` on every
+platform, since git reads its shebang on Windows too. Windows is no longer
+`continue-on-error`, and a run is superseded by the next push to the same ref.
+
+**Stopped at:** 134/134 pass locally; the three-platform result comes from CI.
+
+**Next action:** read the next CI run; then the publisher and repository
+decisions and the first publish.

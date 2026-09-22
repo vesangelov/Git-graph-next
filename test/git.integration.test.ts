@@ -8,6 +8,7 @@ import { GitExecutor } from '../src/git/executor.ts';
 import { GitLogReader } from '../src/git/log.ts';
 import { GitRefReader } from '../src/git/refs.ts';
 import { PendingOperation } from '../src/types.ts';
+import { gitEnv } from './support.ts';
 
 let repo: string;
 let git: GitExecutor;
@@ -17,7 +18,7 @@ function fixture(cwd: string, ...args: string[]): string {
 	return execFileSync('git', args, {
 		cwd,
 		encoding: 'utf8',
-		env: { ...process.env, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+		env: gitEnv()
 	});
 }
 
@@ -32,6 +33,7 @@ before(async () => {
 	fixture(repo, 'init', '-q', '-b', 'main');
 	fixture(repo, 'config', 'user.email', 'test@example.com');
 	fixture(repo, 'config', 'user.name', 'Тест Потребител');
+	fixture(repo, 'config', 'core.autocrlf', 'false');
 
 	commitFile(repo, 'a.txt', 'a\n', 'първи комит с кирилица 🎉');
 	commitFile(repo, 'a.txt', 'ab\n', 'subject line\n\nA body with a blank line.\n\nAnd a "quoted" $(thing) | pipe.');

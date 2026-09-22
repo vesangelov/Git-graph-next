@@ -57,19 +57,16 @@ export class EditorBridge {
 		const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 		// Unlike the editor, git and ssh run the askpass program directly, with
-		// no shell: it has to be an executable file, not a command line.
+		// no shell: it has to be an executable file, not a command line. A shell
+		// script works on Windows too — git reads the shebang and runs it with
+		// the `sh` it ships with.
 		let askpassFile: string | null = null;
 		if (askpassScript !== undefined) {
-			const windows = process.platform === 'win32';
-			const file = windows ? askpassScript.replace(/\.sh$/, '.bat') : askpassScript;
-			const body = windows
-				? '@echo off\r\n"%GIT_GRAPH_NEXT_NODE%" "%GIT_GRAPH_NEXT_SCRIPT%" --askpass %*\r\n'
-				: '#!/bin/sh\nexec "$GIT_GRAPH_NEXT_NODE" "$GIT_GRAPH_NEXT_SCRIPT" --askpass "$@"\n';
 			try {
-				mkdirSync(dirname(file), { recursive: true });
-				writeFileSync(file, body, { mode: 0o700 });
-				if (!windows) chmodSync(file, 0o700);
-				askpassFile = file;
+				mkdirSync(dirname(askpassScript), { recursive: true });
+				writeFileSync(askpassScript, '#!/bin/sh\nexec "$GIT_GRAPH_NEXT_NODE" "$GIT_GRAPH_NEXT_SCRIPT" --askpass "$@"\n', { mode: 0o700 });
+				if (process.platform !== 'win32') chmodSync(askpassScript, 0o700);
+				askpassFile = askpassScript;
 			} catch {
 				askpassFile = null;
 			}

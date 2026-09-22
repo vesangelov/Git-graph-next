@@ -348,7 +348,9 @@ export function planAction(action: GitAction, options: ActionOptions): GitComman
 				local('revert', '--no-edit', ...(action.mainline !== null ? ['--mainline', String(action.mainline)] : []), ...sign(options.signCommits), action.hash)
 			];
 		case 'reset':
-			return [local('reset', `--${action.mode}`, action.hash, '--')];
+			// No trailing `--`: with it this is the "reset paths" form, which
+			// older git versions refuse to combine with --hard.
+			return [local('reset', `--${action.mode}`, action.hash)];
 		case 'stashPush':
 			return [local('stash', 'push', ...(action.includeUntracked ? ['--include-untracked'] : []), ...(action.message !== '' ? ['--message', action.message] : []))];
 		case 'stashApply':
@@ -362,9 +364,9 @@ export function planAction(action: GitAction, options: ActionOptions): GitComman
 		case 'stageAll':
 			return [local('add', '--all', '--')];
 		case 'unstageAll':
-			return [local('reset', '--mixed', 'HEAD', '--')];
+			return [local('reset', '--mixed', 'HEAD')];
 		case 'discardChanges':
-			return [local('reset', '--hard', 'HEAD', '--')];
+			return [local('reset', '--hard', 'HEAD')];
 		case 'cleanUntracked':
 			return [local('clean', '--force', ...(action.directories ? ['-d'] : []))];
 		case 'continueOperation':
