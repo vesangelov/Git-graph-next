@@ -4,7 +4,7 @@
  * send well-formed values; anything that reaches git's argument list is
  * checked here first. No vscode import, so it is testable in plain Node.
  */
-import { UNCOMMITTED, type ChangeTarget } from '../types.ts';
+import { STAGED, UNCOMMITTED, type ChangeTarget } from '../types.ts';
 
 export const HASH = /^[0-9a-f]{40}$/;
 
@@ -18,8 +18,8 @@ export function isValidTarget(target: unknown, knownRepos: readonly string[]): t
 	const { repo, hash, base } = target as Record<string, unknown>;
 	return (
 		typeof repo === 'string' && knownRepos.includes(repo) &&
-		typeof hash === 'string' && (HASH.test(hash) || hash === UNCOMMITTED) &&
-		(base === null || (typeof base === 'string' && HASH.test(base)))
+		typeof hash === 'string' && (HASH.test(hash) || hash === UNCOMMITTED || hash === STAGED) &&
+		(base === null || (typeof base === 'string' && (HASH.test(base) || base === STAGED)))
 	);
 }
 

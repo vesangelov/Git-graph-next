@@ -1,4 +1,4 @@
-import { UNCOMMITTED, type Commit, type Hash } from '../types.ts';
+import { isUncommittedRow, type Commit, type Hash } from '../types.ts';
 
 /** Shorter runs are left alone: folding two rows into one saves nothing. */
 export const MIN_RUN = 3;
@@ -30,7 +30,7 @@ export function collapseRuns(commits: readonly Commit[], keep: ReadonlySet<Hash>
 		for (const parent of commit.parents) children.set(parent, (children.get(parent) ?? 0) + 1);
 	}
 	const foldable = (commit: Commit) =>
-		commit.hash !== UNCOMMITTED &&
+		!isUncommittedRow(commit.hash) &&
 		commit.stash === null &&
 		commit.parents.length === 1 &&
 		children.get(commit.hash) === 1 &&

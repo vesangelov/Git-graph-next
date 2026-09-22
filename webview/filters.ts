@@ -378,6 +378,19 @@ export class FilterControls {
 			list.replaceChildren(...rows);
 		};
 		search.addEventListener('input', fill);
+		// Arrow keys walk the list and Space/Enter ticks a row (#484).
+		const move = (from: Element | null, step: number) => {
+			const boxes = [...list.querySelectorAll<HTMLInputElement>('input')];
+			if (boxes.length === 0) return;
+			const index = from === null ? -1 : boxes.indexOf(from.closest('.branch-option')?.querySelector('input') ?? boxes[0]);
+			boxes[Math.max(0, Math.min(boxes.length - 1, index + step))].focus();
+		};
+		this.popup.addEventListener('keydown', (event) => {
+			if (event.key === 'ArrowDown') move(document.activeElement, 1);
+			else if (event.key === 'ArrowUp') move(document.activeElement, -1);
+			else return;
+			event.preventDefault();
+		});
 		search.addEventListener('keydown', (event) => {
 			// Enter picks the only match, the common case when searching.
 			if (event.key !== 'Enter') return;

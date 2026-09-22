@@ -51,3 +51,7 @@ All notable changes to Git Graph Next are listed here.
 - Copy or open a commit's web link; plain web addresses in messages are links.
 - A HEAD button to jump to the checked-out commit; Show Git Output with every command the actions ran.
 - Author avatars, off by default.
+- Passwords and SSH key passphrases are asked for in VS Code, so pushing and pulling work without a credential helper.
+- Staged and working tree changes as separate rows, with Stage All and Unstage All.
+- Several graph tabs at once; Go to Branch, Tag or Stash; open the graph automatically on startup.
+- Compare any commit with the working tree; hovering a commit brings out its branch line; a detached HEAD is shown in the graph; many refs on one commit fold into "+N".

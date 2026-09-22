@@ -85,6 +85,10 @@ export function showStatusBarItem(): boolean {
 	return read('showStatusBarItem', true);
 }
 
+export function openOnStartup(): boolean {
+	return read('openOnStartup', false);
+}
+
 export function showUntrackedFiles(): boolean {
 	return read('showUntrackedFiles', true);
 }
@@ -154,6 +158,7 @@ export function graphDataRequest(options: LoadOptions, followRenames: boolean): 
 		showUncommittedChanges: read('showUncommittedChanges', true),
 		showUntrackedFiles: read('showUntrackedFiles', true),
 		showNotes: read('showNotes', true),
+		separateStaged: read('separateStagedChanges', false),
 		issueLinkSettings: issueLinkSettings(),
 		issueLinkAutoDetect: read('issueLinking.autoDetect', true)
 	};

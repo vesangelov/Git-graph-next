@@ -143,6 +143,12 @@ export class GraphController implements vscode.Disposable {
 		this.post({ type: 'toggleCompact' });
 	}
 
+	/** Scrolls the view to a commit (#521). */
+	revealCommit(repo: string, hash: string, label: string): void {
+		this.selectRepo(repo);
+		this.post({ type: 'revealCommit', repo, hash, label });
+	}
+
 	/** Opens the view's Fetch dialog. */
 	openFetch(): void {
 		this.post({ type: 'runFetch' });

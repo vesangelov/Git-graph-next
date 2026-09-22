@@ -1,5 +1,5 @@
 import type { GitExecutor } from './executor.ts';
-import { FileChangeType, UNCOMMITTED, type ChangeTarget, type FileChange, type Hash } from '../types.ts';
+import { FileChangeType, STAGED, UNCOMMITTED, type ChangeTarget, type FileChange, type Hash } from '../types.ts';
 
 /**
  * Flags every diff invocation needs. `--no-color` matters: with
@@ -91,9 +91,18 @@ function combine(nameStatus: string, numstat: string): FileChange[] {
 	}));
 }
 
-/** Files changed by a commit (against `base`), or in the working tree when `hash` is `UNCOMMITTED`. */
+/**
+ * Files changed by a commit (against `base`), or uncommitted ones: everything
+ * not committed (`UNCOMMITTED` against a commit), only what is staged
+ * (`STAGED`), or only what is not staged (`UNCOMMITTED` against `STAGED`).
+ */
 export async function readChanges(git: GitExecutor, target: ChangeTarget, includeUntracked = true): Promise<FileChange[]> {
-	if (target.hash === UNCOMMITTED) return readUncommittedChanges(git, target.repo, target.base, includeUntracked);
+	if (target.hash === STAGED) return readIndexChanges(git, target.repo, target.base);
+	if (target.hash === UNCOMMITTED) {
+		return target.base === STAGED
+			? readUncommittedChanges(git, target.repo, null, includeUntracked, true)
+			: readUncommittedChanges(git, target.repo, target.base, includeUntracked, false);
+	}
 
 	const range = target.base === null ? ['--root', target.hash] : [target.base, target.hash];
 	const [nameStatus, numstat] = await Promise.all([
@@ -107,11 +116,12 @@ export async function readChanges(git: GitExecutor, target: ChangeTarget, includ
  * Changes in the index and working tree together, against `base` (HEAD), plus
  * untracked files — i.e. everything that would be lost by a hard reset.
  */
-async function readUncommittedChanges(git: GitExecutor, repo: string, base: Hash | null, includeUntracked: boolean): Promise<FileChange[]> {
-	const against = base ?? 'HEAD';
+async function readUncommittedChanges(git: GitExecutor, repo: string, base: Hash | null, includeUntracked: boolean, unstagedOnly = false): Promise<FileChange[]> {
+	// Without a revision, `git diff` compares the working tree with the index.
+	const against = unstagedOnly ? [] : [base ?? 'HEAD'];
 	const [nameStatus, numstat, untracked] = await Promise.all([
-		git.run(repo, ['diff', ...DIFF_FLAGS, '--name-status', against]),
-		git.run(repo, ['diff', ...DIFF_FLAGS, '--numstat', against]),
+		git.run(repo, ['diff', ...DIFF_FLAGS, '--name-status', ...against]),
+		git.run(repo, ['diff', ...DIFF_FLAGS, '--numstat', ...against]),
 		includeUntracked ? git.run(repo, ['ls-files', '--others', '--exclude-standard', '-z']) : Promise.resolve('')
 	]);
 	const changes = combine(nameStatus, numstat);
@@ -119,6 +129,16 @@ async function readUncommittedChanges(git: GitExecutor, repo: string, base: Hash
 		if (path !== '') changes.push({ type: FileChangeType.Untracked, path, oldPath: null, additions: null, deletions: null });
 	}
 	return sortChanges(changes);
+}
+
+/** What is staged: the index against the last commit (#575). */
+async function readIndexChanges(git: GitExecutor, repo: string, base: Hash | null): Promise<FileChange[]> {
+	const against = base === null ? [] : [base];
+	const [nameStatus, numstat] = await Promise.all([
+		git.run(repo, ['diff', '--cached', ...DIFF_FLAGS, '--name-status', ...against]),
+		git.run(repo, ['diff', '--cached', ...DIFF_FLAGS, '--numstat', ...against])
+	]);
+	return sortChanges(combine(nameStatus, numstat));
 }
 
 /** Orders by path, the way a file tree reads, so the list is stable between loads. */

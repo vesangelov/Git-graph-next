@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { after, before, beforeEach, test } from 'node:test';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile, execFileSync } from 'node:child_process';
+import { accessSync, constants, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { buildSync } from 'esbuild';
@@ -17,7 +17,10 @@ let repo: string;
 let git: GitExecutor;
 let bridge: EditorBridge;
 /** What the fake editor does with the next file: returns false to cancel. */
+let askpassScript: string;
 let onEdit: (file: string) => boolean = () => true;
+/** Answers the fake credential prompts, in order. */
+const prompts: string[] = [];
 const edited: string[] = [];
 const options = { signCommits: false, signTags: false };
 const env = { ...process.env, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
@@ -44,11 +47,13 @@ before(async () => {
 	root = mkdtempSync(join(tmpdir(), 'ggn-rebase-'));
 	// The real editor script, built the way the extension ships it.
 	const script = join(root, 'editor.js');
+	askpassScript = join(root, 'askpass', 'askpass.sh');
 	buildSync({ entryPoints: ['src/editor/client.ts'], outfile: script, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
-	bridge = await EditorBridge.start(script, process.execPath, async (file) => {
-		edited.push(basename(file));
-		return onEdit(file);
-	});
+	bridge = await EditorBridge.start(script, process.execPath, async (request) => {
+		if (request.kind === 'prompt') return { ok: true, value: prompts.shift() ?? '' };
+		edited.push(basename(request.value));
+		return { ok: onEdit(request.value) };
+	}, askpassScript);
 });
 
 after(() => {
@@ -173,4 +178,31 @@ test('an interrupted git am is recognised, and can be aborted', async () => {
 	assert.equal((await new GitRefReader(git, repo).readState()).pendingOperation, PendingOperation.Am);
 	await run({ kind: 'abortOperation', operation: PendingOperation.Am });
 	assert.equal((await new GitRefReader(git, repo).readState()).pendingOperation, null);
+});
+
+test('answers git\'s password prompts through VS Code, and leaves ssh an executable to call', async () => {
+	prompts.length = 0;
+	prompts.push('hunter2', 'hunter2');
+	const filled = await git.run(repo, ['credential', 'fill'], {
+		stdin: 'protocol=https\nhost=example.test\nusername=me\n\n',
+		// No helper, so git has nowhere to look but the askpass program.
+		env: { ...bridge.askpassEnvironment(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+	});
+	assert.match(filled, /^password=hunter2$/m, 'what the user typed reaches git');
+	assert.equal(prompts.length, 1, 'git asked exactly once');
+
+	// ssh runs SSH_ASKPASS itself: it must be an executable file, not a command line.
+	const askpass = bridge.askpassEnvironment().SSH_ASKPASS;
+	assert.equal(askpass, askpassScript);
+	assert.equal(bridge.askpassEnvironment().SSH_ASKPASS_REQUIRE, 'force');
+	accessSync(askpass, constants.X_OK);
+	// Asynchronously: the bridge that answers runs in this process, so a
+	// blocking call here would wait for itself.
+	const typed = await new Promise<string>((resolve, reject) => {
+		execFile(askpass, ["Enter passphrase for key '/tmp/id':"], { env: { ...process.env, ...bridge.askpassEnvironment() } }, (error, stdout) =>
+			error === null ? resolve(stdout.trim()) : reject(error)
+		);
+	});
+	assert.equal(typed, 'hunter2');
+	assert.equal(prompts.length, 0, 'the ssh-style call was answered too');
 });

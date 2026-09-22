@@ -148,6 +148,18 @@
         "command": "gitGraphNext.clearAvatarCache",
         "title": "Clear Avatar Cache",
         "category": "Git Graph Next"
+      },
+      {
+        "command": "gitGraphNext.goTo",
+        "title": "Go to Branch, Tag or Stash…",
+        "category": "Git Graph Next",
+        "icon": "$(target)"
+      },
+      {
+        "command": "gitGraphNext.viewNewTab",
+        "title": "Open Git Graph in New Tab",
+        "category": "Git Graph Next",
+        "icon": "$(split-horizontal)"
       }
     ],
     "menus": {
@@ -256,6 +268,11 @@
           "command": "gitGraphNext.review.end",
           "when": "view == gitGraphNext.changesView && gitGraphNext.reviewActive",
           "group": "navigation@4"
+        },
+        {
+          "command": "gitGraphNext.goTo",
+          "when": "view == gitGraphNext.graphView",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [
@@ -321,6 +338,12 @@
           "type": "boolean",
           "default": true,
           "description": "Show a 'Git Graph' item in the Status Bar.",
+          "scope": "window"
+        },
+        "git-graph-next.openOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the Git Graph view automatically when a window with a repository is opened.",
           "scope": "window"
         },
         "git-graph-next.git.path": {
@@ -496,6 +519,12 @@
           "default": true,
           "description": "Show the Uncommitted Changes row.",
           "scope": "window"
+        },
+        "git-graph-next.separateStagedChanges": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show staged changes and working tree changes as two rows instead of one \"Uncommitted Changes\" row.",
+          "scope": "resource"
         },
         "git-graph-next.showUntrackedFiles": {
           "type": "boolean",

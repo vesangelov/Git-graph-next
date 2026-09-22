@@ -33,8 +33,8 @@ export interface LayoutOptions {
 	readonly pinnedBranches: readonly PinnedBranch[];
 	/** Number of colours available; lane colours cycle through them. */
 	readonly colourCount: number;
-	/** Hash of the synthetic Uncommitted Changes row, whose edge is dashed. */
-	readonly uncommittedHash: Hash | null;
+	/** Synthetic rows (uncommitted, staged) whose edge downwards is drawn dashed. */
+	readonly dashedRows: ReadonlySet<Hash>;
 	/**
 	 * Fixed colours for branch tips (#254): the lane starting at, or passing
 	 * through, one of these commits takes this colour index, and its first
@@ -47,7 +47,7 @@ export interface LayoutOptions {
 const DEFAULT_OPTIONS: LayoutOptions = {
 	pinnedBranches: [],
 	colourCount: 12,
-	uncommittedHash: null,
+	dashedRows: new Set<Hash>(),
 	laneColours: new Map()
 };
 
@@ -141,7 +141,7 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 			}
 		}
 
-		const dashed = opts.uncommittedHash !== null && commit.hash === opts.uncommittedHash;
+		const dashed = opts.dashedRows.has(commit.hash);
 		vertices.push({ hash: commit.hash, column, colour, dimmed: false });
 
 		// The first parent continues this lane, inheriting the colour. Later

@@ -1,4 +1,4 @@
-import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type Hash } from '../src/types.ts';
+import { FileChangeType, STAGED, isUncommittedRow, type ChangeTarget, type Commit, type FileChange, type Hash } from '../src/types.ts';
 import { formatDateLong, shortHash } from './format.ts';
 import { appendMessage, el, type RefLabel } from './render/table.ts';
 import type { IssueLinkRule } from '../src/git/remote.ts';
@@ -106,12 +106,12 @@ export class DetailsPane {
 		this.target = { repo, hash: newer.hash, base: older.hash };
 		this.shownChanges = null;
 		this.element.hidden = false;
-		const name = (c: Commit) => (c.hash === UNCOMMITTED ? 'working tree' : shortHash(c.hash));
+		const name = (c: Commit) => (isUncommittedRow(c.hash) ? 'working tree' : shortHash(c.hash));
 		this.title.textContent = `Comparing ${name(older)} → ${name(newer)}`;
 		this.title.title = this.title.textContent;
 		const row = (c: Commit) => {
 			const cell = el('span');
-			if (c.hash === UNCOMMITTED) cell.textContent = 'Uncommitted changes';
+			if (isUncommittedRow(c.hash)) cell.textContent = c.hash === STAGED ? 'Staged changes' : 'Uncommitted changes';
 			else cell.append(this.commitLink(c.hash), `  ${c.subject}`);
 			return cell;
 		};
@@ -121,6 +121,26 @@ export class DetailsPane {
 				['To', row(newer)]
 			]),
 			el('div', 'details-message', 'Every change between the two, as one diff per file. Right-click the selection for actions on both commits.')
+		);
+		this.files.replaceChildren(el('div', 'details-note', 'Loading changed files…'));
+		this.syncReview();
+		return this.target;
+	}
+
+	/**
+	 * Compares something with the working tree (#782), without both sides
+	 * being loaded commits.
+	 */
+	openWorkingTreeComparison(target: ChangeTarget, fromLabel: string): ChangeTarget {
+		this.mode = 'compare';
+		this.target = target;
+		this.shownChanges = null;
+		this.element.hidden = false;
+		this.title.textContent = `Comparing ${fromLabel} → working tree`;
+		this.title.title = this.title.textContent;
+		this.meta.replaceChildren(
+			this.table([['From', fromLabel], ['To', 'The files as they are now, including uncommitted changes']]),
+			el('div', 'details-message', 'Every difference between that commit and your working tree.')
 		);
 		this.files.replaceChildren(el('div', 'details-note', 'Loading changed files…'));
 		this.syncReview();
@@ -150,7 +170,7 @@ export class DetailsPane {
 		this.shownChanges = null;
 		this.target = changeTarget(repo, commit);
 		this.element.hidden = false;
-		this.title.textContent = commit.hash === UNCOMMITTED ? commit.subject : `${shortHash(commit.hash)}  ${commit.subject}`;
+		this.title.textContent = isUncommittedRow(commit.hash) ? commit.subject : `${shortHash(commit.hash)}  ${commit.subject}`;
 		this.title.title = this.title.textContent;
 		this.renderMeta(commit, labels);
 		this.files.replaceChildren(el('div', 'details-note', 'Loading changed files…'));
@@ -253,9 +273,16 @@ export class DetailsPane {
 	private renderMeta(commit: Commit, labels: readonly RefLabel[]): void {
 		const rows: [string, HTMLElement | string][] = [];
 
-		if (commit.hash === UNCOMMITTED) {
-			rows.push(['Against', commit.parents[0] !== undefined ? this.commitLink(commit.parents[0]) : 'nothing']);
-			this.meta.replaceChildren(this.table(rows), el('div', 'details-message', 'Changes in the index and working tree, compared with HEAD.'));
+		if (isUncommittedRow(commit.hash)) {
+			const parent = commit.parents[0];
+			rows.push(['Against', parent === undefined ? 'nothing' : parent === STAGED ? 'the staged changes' : this.commitLink(parent)]);
+			const what =
+				commit.hash === STAGED
+					? 'What is staged, compared with the last commit.'
+					: parent === STAGED
+						? 'What is changed but not staged yet, compared with the index.'
+						: 'Changes in the index and working tree, compared with HEAD.';
+			this.meta.replaceChildren(this.table(rows), el('div', 'details-message', what));
 			return;
 		}
 

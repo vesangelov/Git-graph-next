@@ -1,8 +1,11 @@
-import { UNCOMMITTED, type Commit, type GraphData, type GraphLayout, type Hash } from '../../src/types.ts';
+import { STAGED, UNCOMMITTED, isUncommittedRow, type Commit, type GraphData, type GraphLayout, type Hash } from '../../src/types.ts';
 import type { ViewConfig } from '../../src/view/protocol.ts';
 import { formatDate, formatDateLong, shortHash } from '../format.ts';
 import { linkify, type IssueLinkRule } from '../../src/git/remote.ts';
 import { DEFAULT_GEOMETRY, graphPixelWidth, renderGraph, type GraphGeometry } from './graph.ts';
+
+/** Labels drawn on one row before the rest fold into a "+N" chip (#777). */
+const MAX_LABELS = 4;
 
 /** Rows rendered above and below the viewport, so fast scrolling shows no gaps. */
 const OVERSCAN = 15;
@@ -44,6 +47,11 @@ export function buildLabels(data: GraphData, config: Pick<ViewConfig, 'combineLo
 	// Refs hidden by exclude patterns (#360) lose their labels too. The
 	// checked-out branch keeps its label: git still shows its commits.
 	const excluded = new Set(data.excludedRefs);
+
+	// A detached HEAD is not a branch, but the graph should still say where it is (#678).
+	if (data.repo.isDetached && data.repo.headHash !== null) {
+		add(data.repo.headHash, { kind: 'head', name: 'HEAD (detached)', remotes: [], current: true, title: 'HEAD is detached at this commit' });
+	}
 
 	for (const head of data.heads) {
 		if (excluded.has(`refs/heads/${head.name}`) && data.repo.head !== head.name) continue;
@@ -149,6 +157,9 @@ export class CommitTable {
 	private multi = new Set<Hash>();
 	/** Avatars by lower-case e-mail, when enabled; null = the author has none. */
 	private readonly avatars = new Map<string, string | null>();
+	/** Rows whose "+N" chip was clicked, showing every label (#777). */
+	private readonly expandedLabels = new Set<Hash>();
+	private highlightedLane: number | null = null;
 	/** The window currently in the DOM, to skip redundant redraws while scrolling. */
 	private drawn: { first: number; last: number } | null = null;
 	private frame = 0;
@@ -187,6 +198,9 @@ export class CommitTable {
 		new ResizeObserver(() => this.scheduleDraw()).observe(this.element);
 		this.rowsLayer.addEventListener('click', (event) => this.onRowEvent(event, false));
 		this.rowsLayer.addEventListener('contextmenu', (event) => this.onRowEvent(event, true));
+		// Hovering a row brings out the line its commit is on (#270).
+		this.rowsLayer.addEventListener('mouseover', (event) => this.highlightLane(event));
+		this.rowsLayer.addEventListener('mouseleave', () => this.highlightLane(null));
 		this.rowsLayer.addEventListener('dblclick', (event) => {
 			const hit = this.rowFromEvent(event);
 			if (hit?.label != null) this.callbacks.onLabelDoubleClick(hit.commit, hit.label);
@@ -325,11 +339,12 @@ export class CommitTable {
 			first: range.first,
 			last: range.last,
 			headHash: model.data.repo.headHash,
-			uncommittedHash: UNCOMMITTED,
+			uncommittedHashes: new Set([UNCOMMITTED, STAGED]),
 			stashHashes: model.stashHashes,
 			collapsedHashes: model.collapsed
 		});
 
+		if (this.highlightedLane !== null) this.applyLaneHighlight();
 		if (range.last >= rowCount - LOAD_MORE_THRESHOLD) this.callbacks.onNearEnd();
 		if (model.config.avatars) {
 			const missing = new Set<string>();
@@ -372,7 +387,7 @@ export class CommitTable {
 		const element = el('div', 'row commit');
 		element.dataset.row = String(row);
 		if (commit.hash === this.selected || this.multi.has(commit.hash)) element.classList.add('selected');
-		if (commit.hash === UNCOMMITTED) element.classList.add('uncommitted');
+		if (isUncommittedRow(commit.hash)) element.classList.add('uncommitted');
 		if (commit.hash === model.data.repo.headHash) element.classList.add('head');
 		if (this.search?.matches.has(commit.hash) === true) {
 			element.classList.add('match');
@@ -390,7 +405,10 @@ export class CommitTable {
 			element.style.setProperty('--row-colour', colour);
 		}
 		const rightLabels: HTMLElement[] = [];
-		for (const label of model.labels.get(commit.hash) ?? []) {
+		const all = model.labels.get(commit.hash) ?? [];
+		// Many refs on one commit would push the message out of sight (#777).
+		const folded = all.length > MAX_LABELS && !this.expandedLabels.has(commit.hash);
+		for (const label of folded ? all.slice(0, MAX_LABELS) : all) {
 			const tag = el('span', `label ${label.kind}${label.current ? ' current' : ''}`);
 			tag.title = label.title;
 			tag.style.setProperty('--label-colour', colour);
@@ -408,10 +426,16 @@ export class CommitTable {
 		const subject = el('span', 'subject');
 		appendMessage(subject, commit.subject, this.search?.matches.has(commit.hash) === true ? this.search.terms : [], model.data.issueLinks);
 		subject.title = commit.body === '' ? commit.subject : `${commit.subject}\n\n${commit.body}`;
-		if (this.compact && commit.hash !== UNCOMMITTED) {
+		if (this.compact && !isUncommittedRow(commit.hash)) {
 			const when = formatDate(model.config.dateType === 'Commit Date' ? commit.committerDate : commit.authorDate, model.config.dateFormat);
 			const who = commit.stash !== null ? commit.stash.selector : commit.author;
 			subject.title = `${shortHash(commit.hash)} · ${who} · ${when}\n\n${subject.title}`;
+		}
+		if (folded) {
+			const more = el('span', 'label more', `+${all.length - MAX_LABELS}`);
+			more.title = `${all.length - MAX_LABELS} more: ${all.slice(MAX_LABELS).map((l) => l.name).join(', ')}\nClick to show them all`;
+			more.dataset.more = commit.hash;
+			desc.appendChild(more);
 		}
 		desc.appendChild(subject);
 		if (rightLabels.length > 0) {
@@ -422,11 +446,11 @@ export class CommitTable {
 		element.appendChild(desc);
 
 		const seconds = model.config.dateType === 'Commit Date' ? commit.committerDate : commit.authorDate;
-		const date = el('div', 'cell date', commit.hash === UNCOMMITTED ? '' : formatDate(seconds, model.config.dateFormat));
-		date.title = commit.hash === UNCOMMITTED ? '' : formatDateLong(seconds);
+		const date = el('div', 'cell date', isUncommittedRow(commit.hash) ? '' : formatDate(seconds, model.config.dateFormat));
+		date.title = isUncommittedRow(commit.hash) ? '' : formatDateLong(seconds);
 		element.appendChild(date);
 
-		const authorText = commit.hash === UNCOMMITTED || commit.stash !== null ? '' : commit.author;
+		const authorText = isUncommittedRow(commit.hash) || commit.stash !== null ? '' : commit.author;
 		const author = el('div', 'cell author');
 		const avatar = authorText !== '' && model.config.avatars ? this.avatars.get(commit.authorEmail.toLowerCase()) : undefined;
 		if (typeof avatar === 'string') {
@@ -439,8 +463,8 @@ export class CommitTable {
 		if (authorText !== '') author.title = `${commit.author} <${commit.authorEmail}>`;
 		element.appendChild(author);
 
-		const hash = el('div', 'cell hash', commit.hash === UNCOMMITTED ? '' : shortHash(commit.hash));
-		if (commit.hash !== UNCOMMITTED) hash.title = commit.hash;
+		const hash = el('div', 'cell hash', isUncommittedRow(commit.hash) ? '' : shortHash(commit.hash));
+		if (!isUncommittedRow(commit.hash)) hash.title = commit.hash;
 		element.appendChild(hash);
 
 		return element;
@@ -459,6 +483,13 @@ export class CommitTable {
 	}
 
 	private onRowEvent(event: MouseEvent, context: boolean): void {
+		const more = (event.target as HTMLElement | null)?.closest<HTMLElement>('.label.more')?.dataset.more;
+		if (!context && more !== undefined) {
+			this.expandedLabels.add(more);
+			this.drawn = null;
+			this.draw();
+			return;
+		}
 		const link = (event.target as HTMLElement | null)?.closest<HTMLElement>('a.issue-link');
 		if (!context && link?.dataset.url !== undefined) {
 			this.callbacks.onOpenUrl(link.dataset.url);
@@ -522,6 +553,23 @@ export class CommitTable {
 		else if (chosen.length === 1) {
 			this.multi.clear();
 			this.select(chosen[0].hash);
+		}
+	}
+
+	/** Dims the lines that do not belong to the hovered row's lane. */
+	private highlightLane(event: MouseEvent | null): void {
+		const row = event === null ? null : (event.target as HTMLElement | null)?.closest<HTMLElement>('.row.commit');
+		const lane = row === null || row === undefined || this.model === null ? null : this.model.layout.vertices[Number(row.dataset.row)]?.colour ?? null;
+		if (lane === this.highlightedLane) return;
+		this.highlightedLane = lane;
+		this.applyLaneHighlight();
+	}
+
+	/** Dims lines of other lanes; also after a redraw, which builds new elements. */
+	private applyLaneHighlight(): void {
+		const lane = this.highlightedLane;
+		for (const element of this.svg.querySelectorAll<SVGElement>('[data-lane]')) {
+			element.style.opacity = lane === null || element.dataset.lane === String(lane) ? '' : '0.25';
 		}
 	}
 

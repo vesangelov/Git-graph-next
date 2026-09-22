@@ -1,5 +1,5 @@
 import { layoutGraph } from '../src/graph/layout.ts';
-import { FileChangeType, UNCOMMITTED, type ChangeTarget, type Commit, type FileChange, type GitAction, type GraphData, type Hash } from '../src/types.ts';
+import { FileChangeType, STAGED, UNCOMMITTED, isUncommittedRow, type ChangeTarget, type Commit, type FileChange, type GitAction, type GraphData, type Hash } from '../src/types.ts';
 import { NO_FILTER, completeFilter, isFiltered, type ReviewSummary, type FilterState, type HostMessage, type LoadOptions, type PersistedViewState, type RepoOption, type ViewConfig, type ViewMode, type WebviewMessage } from '../src/view/protocol.ts';
 import { FilterControls } from './filters.ts';
 import { collapseRuns, runContaining } from '../src/graph/collapse.ts';
@@ -410,7 +410,7 @@ function runSearch(keepCurrent: boolean): void {
 	const labels = buildLabels(data, config);
 	const useCommitDate = config.dateType === 'Commit Date';
 	search.matches = data.commits
-		.filter((c) => c.hash !== UNCOMMITTED && matchesQuery(query, c, searchRefs(labels.get(c.hash) ?? []), useCommitDate))
+		.filter((c) => !isUncommittedRow(c.hash) && matchesQuery(query, c, searchRefs(labels.get(c.hash) ?? []), useCommitDate))
 		.map((c) => c.hash);
 
 	let index = -1;
@@ -471,7 +471,7 @@ function searchHistory(): void {
 	search.history = 'searching';
 	search.error = null;
 	search.requestId++;
-	const loaded = data.commits.filter((c) => c.hash !== UNCOMMITTED && c.stash === null).length;
+	const loaded = data.commits.filter((c) => !isUncommittedRow(c.hash) && c.stash === null).length;
 	post({
 		type: 'searchHistory',
 		requestId: search.requestId,
@@ -506,7 +506,7 @@ function selectCommit(commit: Commit, toggle: boolean): void {
 	}
 	window.clearTimeout(selectTimer);
 	selectTimer = window.setTimeout(() => {
-		const title = commit.hash === UNCOMMITTED ? commit.subject : `${shortHash(commit.hash)} ${commit.subject}`;
+		const title = isUncommittedRow(commit.hash) ? commit.subject : `${shortHash(commit.hash)} ${commit.subject}`;
 		post({ type: 'selectCommit', target: changeTarget(repo, commit), title, hasNote: hasNote(commit.hash) });
 	}, SELECT_DEBOUNCE_MS);
 }
@@ -537,6 +537,15 @@ function fileMenuItems(target: ChangeTarget, change: FileChange): MenuItem[] {
 	}
 	group(items, [{ label: 'Copy Relative Path', action: () => post({ type: 'copyToClipboard', text: change.path, label: 'path' }) }]);
 	return items;
+}
+
+/** Shows what changed between a commit and the working tree (#782). */
+function compareWithWorkingTree(commit: Commit): void {
+	if (state.repo === null) return;
+	const target = { repo: state.repo, hash: UNCOMMITTED, base: commit.hash };
+	const label = shortHash(commit.hash);
+	if (mode === 'panel') details.openWorkingTreeComparison(target, `${label}  ${commit.subject}`);
+	post({ type: 'selectCommit', target, title: `${label} → working tree`, hasNote: false });
 }
 
 /** Code review of a commit (against its first parent) or of two commits (#756). */
@@ -606,14 +615,19 @@ function menuItems(commit: Commit, label: RefLabel | null): MenuItem[] {
 	if (ctx !== null) group(items, commitActions(ctx, commit));
 	if (state.repo !== null && commit.stash === null) {
 		const target = changeTarget(state.repo, commit);
-		const title = commit.hash === UNCOMMITTED ? 'Uncommitted changes' : `${shortHash(commit.hash)} ${commit.subject}`;
+		const title = isUncommittedRow(commit.hash) ? commit.subject : `${shortHash(commit.hash)} ${commit.subject}`;
+		const compare: MenuItem[] = [];
+		if (!isUncommittedRow(commit.hash)) {
+			compare.push({ label: 'Compare with Working Tree', action: () => compareWithWorkingTree(commit) });
+		}
 		group(items, [
+			...compare,
 			reviewItem(target, title),
 			{ label: 'Open All Changes', action: () => post({ type: 'openAllChanges', target, title }) },
 			{ label: 'Open External Directory Diff', action: () => post({ type: 'externalDiff', target }) }
 		]);
 	}
-	if (commit.hash === UNCOMMITTED) {
+	if (isUncommittedRow(commit.hash)) {
 		group(items, [{ label: 'Copy Summary', action: copy(commit.subject, 'summary') }]);
 		return items;
 	}
@@ -690,7 +704,7 @@ function selectionMenuItems(selection: readonly Commit[]): MenuItem[] {
 	const items: MenuItem[] = [];
 	if (selection.length === 2 && state.repo !== null) {
 		const [newer, older] = selection;
-		const name = (c: Commit) => (c.hash === UNCOMMITTED ? 'working tree' : shortHash(c.hash));
+		const name = (c: Commit) => (isUncommittedRow(c.hash) ? 'working tree' : shortHash(c.hash));
 		const target = { repo: state.repo, hash: newer.hash, base: older.hash };
 		const title = `${name(older)} → ${name(newer)}`;
 		items.push(
@@ -700,7 +714,7 @@ function selectionMenuItems(selection: readonly Commit[]): MenuItem[] {
 		);
 	}
 	if (ctx !== null) group(items, selectionActions(ctx, selection));
-	const hashes = selection.filter((c) => c.hash !== UNCOMMITTED).map((c) => c.hash);
+	const hashes = selection.filter((c) => !isUncommittedRow(c.hash)).map((c) => c.hash);
 	group(items, [{ label: `Copy ${hashes.length} Commit Hashes`, action: () => post({ type: 'copyToClipboard', text: hashes.join('\n'), label: 'commit hashes' }) }]);
 	return items;
 }
@@ -715,7 +729,7 @@ function selectMany(commits: readonly Commit[]): void {
 	if (commits.length === 2) {
 		const [newer, older] = commits;
 		const target = mode === 'panel' ? details.openComparison(state.repo, older, newer) : { repo: state.repo, hash: newer.hash, base: older.hash };
-		const name = (c: Commit) => (c.hash === UNCOMMITTED ? 'working tree' : shortHash(c.hash));
+		const name = (c: Commit) => (isUncommittedRow(c.hash) ? 'working tree' : shortHash(c.hash));
 		post({ type: 'selectCommit', target, title: `${name(older)} → ${name(newer)}`, hasNote: false });
 	} else if (mode === 'panel') {
 		details.openSummary(commits);
@@ -770,7 +784,7 @@ function render(): void {
 	let text = '';
 	if (state.loading) text = 'Loading…';
 	else if (data !== null) {
-		const count = data.commits.filter((c) => c.hash !== UNCOMMITTED && c.stash === null).length;
+		const count = data.commits.filter((c) => !isUncommittedRow(c.hash) && c.stash === null).length;
 		const head = data.repo.isDetached ? 'detached HEAD' : data.repo.head;
 		text = `${count}${data.moreAvailable ? '+' : ''} commits${isFiltered(currentFilter()) ? ' (filtered)' : ''} · ${head ?? ''}`;
 		if (data.repo.pendingOperation !== null) text += ` · ${data.repo.pendingOperation} in progress`;
@@ -851,7 +865,7 @@ function drawGraph(): void {
 	const { palette, laneColours } = resolveBranchColours(shown, config.colours, config.branchColours);
 	const layout = layoutGraph(shown.commits, {
 		colourCount: config.colours.length,
-		uncommittedHash: UNCOMMITTED,
+		dashedRows: new Set([UNCOMMITTED, STAGED]),
 		pinnedBranches: resolvePins(shown, [...config.pinnedBranches, ...currentPins()]),
 		laneColours
 	});
@@ -868,13 +882,13 @@ function toggleCompact(): void {
 }
 
 /** Scrolls to a commit, first expanding the collapsed run it is folded into. */
-function revealCommit(hash: Hash): void {
-	if (table.reveal(hash)) return;
+function revealCommit(hash: Hash): boolean {
+	if (table.reveal(hash)) return true;
 	const run = runContaining(state.runs, hash);
-	if (run === null) return;
+	if (run === null) return false;
 	state.expanded.add(run);
 	drawGraph();
-	table.reveal(hash);
+	return table.reveal(hash);
 }
 
 /**
@@ -888,7 +902,7 @@ function syncDetails(data: GraphData): void {
 	const commit = data.commits.find((c) => c.hash === hash);
 	if (commit === undefined) {
 		details.close();
-	} else if (hash === UNCOMMITTED) {
+	} else if (isUncommittedRow(hash)) {
 		details.open(data.repo.path, commit, []);
 		post({ type: 'selectCommit', target: changeTarget(data.repo.path, commit), title: commit.subject, hasNote: false });
 	}
@@ -964,6 +978,15 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 			for (const email of Object.keys(msg.avatars)) avatarRequests.delete(email);
 			table.setAvatars(msg.avatars);
 			return;
+		case 'revealCommit': {
+			if (msg.repo !== state.repo) return;
+			if (!revealCommit(msg.hash)) {
+				// Not among the loaded commits: offer to look further back.
+				openSearch();
+				searchBar.setQuery(`hash:${msg.hash.slice(0, 10)}`);
+			}
+			return;
+		}
 		case 'reviewState':
 			state.review = msg.review;
 			details.setReview(msg.review);

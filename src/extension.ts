@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { join, relative, sep } from 'node:path';
 import { GitExecutor } from './git/executor.ts';
 import { RepoManager } from './repoManager.ts';
+import { GitRefReader } from './git/refs.ts';
 import { GraphPanel, VIEW_TYPE } from './view/panel.ts';
 import { GraphController, type GraphServices } from './view/controller.ts';
 import { GraphSidebarProvider, SIDEBAR_VIEW_ID } from './view/sidebar.ts';
@@ -12,7 +13,7 @@ import { AvatarService } from './view/avatars.ts';
 import { RebaseEditor } from './view/rebaseEditor.ts';
 import { EditorBridge } from './git/editorBridge.ts';
 import { REVISION_SCHEME, RevisionFileSystem, openChangeDiff, openWorkingFile } from './view/diff.ts';
-import { gitPathCandidates, retainContextWhenHidden, showStatusBarItem } from './config.ts';
+import { gitPathCandidates, openOnStartup, retainContextWhenHidden, showStatusBarItem } from './config.ts';
 
 /**
  * Set as soon as a usable git is found. Menu `when` clauses depend on it, so
@@ -46,7 +47,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const rebaseEditor = new RebaseEditor();
 	let editing: RebaseEditing | null = null;
 	try {
-		const bridge = await EditorBridge.start(join(context.extensionPath, 'dist', 'editor.js'), process.execPath, (file) => rebaseEditor.handle(file));
+		const bridge = await EditorBridge.start(
+			join(context.extensionPath, 'dist', 'editor.js'),
+			process.execPath,
+			async (request) => (request.kind === 'edit' ? { ok: await rebaseEditor.handle(request.value) } : askForSecret(request.value)),
+			join(context.globalStorageUri.fsPath, 'askpass.sh')
+		);
 		editing = { bridge, ui: rebaseEditor };
 		context.subscriptions.push(bridge);
 	} catch {
@@ -61,12 +67,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const avatars = new AvatarService(context.globalState);
 	const services: GraphServices = { extensionUri: context.extensionUri, git, repos, changes, actions, reviews, output, avatars };
 	const sidebar = new GraphSidebarProvider(services);
-	context.subscriptions.push(repos, changes, sidebar, { dispose: () => GraphPanel.disposeCurrent() });
+	context.subscriptions.push(repos, changes, sidebar, { dispose: () => GraphPanel.disposeAll() });
 
 	const open = (repo: string | null = null) => GraphPanel.show(services, repo);
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('gitGraphNext.view', () => open()),
+		vscode.commands.registerCommand('gitGraphNext.viewNewTab', () => GraphPanel.showNew(services)),
 		// Same action, separate id so the sidebar title bar can show a distinct icon.
 		vscode.commands.registerCommand('gitGraphNext.openFullGraph', () => open()),
 
@@ -83,6 +90,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('gitGraphNext.refresh', () => GraphController.refreshAll()),
+
+		// Jump to any ref or stash in the graph (#521, #608).
+		vscode.commands.registerCommand('gitGraphNext.goTo', async () => {
+			const repo = repos.repositories[0];
+			if (repo === undefined) {
+				void vscode.window.showInformationMessage('No Git repositories were found in this workspace.');
+				return;
+			}
+			const reader = new GitRefReader(git, repo.path);
+			const [refs, stashes, state] = await Promise.all([reader.remotes().then((remotes) => reader.readRefs(remotes)), reader.readStashes(), reader.readState()]);
+			const items = [
+				...(state.headHash !== null ? [{ label: '$(target) HEAD', description: state.head ?? 'detached', hash: state.headHash }] : []),
+				...refs.heads.map((head) => ({ label: `$(git-branch) ${head.name}`, description: 'branch', hash: head.hash })),
+				...refs.remoteHeads.map((remote) => ({ label: `$(cloud) ${remote.name}`, description: 'remote branch', hash: remote.hash })),
+				...refs.tags.map((tag) => ({ label: `$(tag) ${tag.name}`, description: 'tag', hash: tag.hash })),
+				...stashes.map((stash) => ({ label: `$(archive) ${stash.selector}`, description: stash.message, hash: stash.hash }))
+			];
+			const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Go to a branch, tag or stash', matchOnDescription: true });
+			if (picked !== undefined) GraphPanel.reveal(services, repo.path, picked.hash, picked.label);
+		}),
 		vscode.commands.registerCommand('gitGraphNext.toggleCompact', () => sidebar.toggleCompact()),
 		vscode.commands.registerCommand('gitGraphNext.fetch', () => sidebar.openFetch()),
 
@@ -188,8 +215,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	await vscode.commands.executeCommand('setContext', ENABLED_CONTEXT, true);
 	await repos.initialise();
 	updateStatusBar();
+	// Open the graph by itself when asked to, once repositories are known (#673).
+	if (openOnStartup() && repos.repositories.length > 0) open();
 }
 
 export function deactivate(): void {
 	/* Everything is released through context.subscriptions. */
+}
+
+/**
+ * Asks for a password or passphrase git needs (#755, #813). The prompt is
+ * git's own text, e.g. "Password for 'https://me@github.com':" or
+ * "Enter passphrase for key '/home/me/.ssh/id_ed25519':". Nothing is stored:
+ * the answer goes straight back to the command that asked.
+ */
+async function askForSecret(prompt: string): Promise<{ ok: boolean; value?: string }> {
+	const trimmed = prompt.trim();
+	const answer = await vscode.window.showInputBox({
+		prompt: trimmed,
+		password: !/^(username|user)\b/i.test(trimmed),
+		ignoreFocusOut: true,
+		title: 'Git Graph Next'
+	});
+	return answer === undefined ? { ok: false } : { ok: true, value: answer };
 }

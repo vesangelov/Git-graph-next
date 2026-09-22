@@ -1278,3 +1278,19 @@ body.mode-sidebar {
 	margin: -2px 6px 0 0;
 	object-fit: cover;
 }
+
+.label.more {
+	cursor: pointer;
+	border-style: dotted;
+	color: var(--vscode-descriptionForeground);
+	padding: 0 6px;
+}
+
+/* ---- Following one line (#270) ---------------------------------------- */
+
+/* The dimming itself is set per element, where the lane is known; this only
+   makes the change gentle. */
+.graph-svg .edge,
+.graph-svg .vertex {
+	transition: opacity 80ms linear;
+}

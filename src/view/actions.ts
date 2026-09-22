@@ -85,9 +85,13 @@ export class ActionRunner {
 				},
 				async (_progress, token) => {
 					for (const command of commands) {
-						const env = command.editor === true ? this.editing!.bridge.environment() : undefined;
+						// Editors open in VS Code; network commands may need a password.
+						const env = {
+							...(command.network ? this.editing?.bridge.askpassEnvironment() : undefined),
+							...(command.editor === true ? this.editing!.bridge.environment() : undefined)
+						};
 						this.log(repo, shellCommand('git', command.args, false));
-						const stdout = await this.git.run(repo, command.args, { token, ...(env !== undefined ? { env } : {}) });
+						const stdout = await this.git.run(repo, command.args, { token, ...(Object.keys(env).length > 0 ? { env } : {}) });
 						if (stdout.trim() !== '') this.output.appendLine(indent(stdout));
 					}
 				}

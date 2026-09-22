@@ -169,6 +169,8 @@ export function validateAction(action: GitAction): void {
 		case 'stashBranch':
 			stash(action.selector);
 			return ref(action.name, 'branch name');
+		case 'stageAll':
+		case 'unstageAll':
 		case 'discardChanges':
 		case 'cleanUntracked':
 			return;
@@ -357,6 +359,10 @@ export function planAction(action: GitAction, options: ActionOptions): GitComman
 			return [local('stash', 'drop', action.selector)];
 		case 'stashBranch':
 			return [local('stash', 'branch', action.name, action.selector)];
+		case 'stageAll':
+			return [local('add', '--all', '--')];
+		case 'unstageAll':
+			return [local('reset', '--mixed', 'HEAD', '--')];
 		case 'discardChanges':
 			return [local('reset', '--hard', 'HEAD', '--')];
 		case 'cleanUntracked':
@@ -441,6 +447,10 @@ export function describeAction(action: GitAction): string {
 			return `Dropping ${action.selector}`;
 		case 'stashBranch':
 			return `Creating branch ${action.name} from ${action.selector}`;
+		case 'stageAll':
+			return 'Staging all changes';
+		case 'unstageAll':
+			return 'Unstaging all changes';
 		case 'discardChanges':
 			return 'Discarding changes';
 		case 'cleanUntracked':

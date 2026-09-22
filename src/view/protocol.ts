@@ -70,6 +70,8 @@ export type HostMessage =
 	| { readonly type: 'graph'; readonly data: GraphData }
 	/** Switches compact mode (#387), from the sidebar's title bar. */
 	| { readonly type: 'toggleCompact' }
+	/** Scrolls to a commit, e.g. from "Go to Branch, Tag or Stash" (#521). */
+	| { readonly type: 'revealCommit'; readonly repo: string; readonly hash: Hash; readonly label: string }
 	/** Opens the Fetch dialog, from the sidebar's title bar. */
 	| { readonly type: 'runFetch' }
 	/** Replaces parts of a repository's filter, e.g. from "View File History". Switches to that repository. */

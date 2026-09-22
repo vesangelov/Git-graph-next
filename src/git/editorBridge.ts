@@ -1,14 +1,21 @@
 import { createServer, type Server, type Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+
+/** What git asked for: a file to edit, or a password to type. */
+export interface BridgeRequest {
+	readonly kind: 'edit' | 'prompt';
+	/** The file to edit, or the prompt git printed. */
+	readonly value: string;
+}
 
 /**
- * Decides what happens to a file git wants edited. Resolves to true when git
- * should continue with the file as it is now on disk, false to cancel.
+ * Answers a request: `ok` false cancels (git aborts, or fails the
+ * authentication); for a prompt, `value` is what git reads as the answer.
  */
-export type EditHandler = (file: string) => Promise<boolean>;
+export type BridgeHandler = (request: BridgeRequest) => Promise<{ ok: boolean; value?: string }>;
 
 /**
  * The extension's end of the editor protocol (see src/editor/client.ts): a
@@ -22,14 +29,17 @@ export class EditorBridge {
 		private readonly server: Server,
 		readonly socketPath: string,
 		private readonly token: string,
-		private readonly command: string
+		private readonly command: string,
+		private readonly node: string,
+		private readonly script: string,
+		private readonly askpassFile: string | null
 	) {}
 
 	/**
 	 * Starts listening. `script` is the bundled editor client; `node` the
 	 * runtime to run it with — in VS Code, its own binary in Node mode.
 	 */
-	static async start(script: string, node: string, handler: EditHandler): Promise<EditorBridge> {
+	static async start(script: string, node: string, handler: BridgeHandler, askpassScript?: string): Promise<EditorBridge> {
 		const id = randomBytes(8).toString('hex');
 		const socketPath = process.platform === 'win32' ? `\\\\.\\pipe\\git-graph-next-editor-${id}` : join(tmpdir(), `git-graph-next-editor-${id}.sock`);
 		const token = randomBytes(24).toString('hex');
@@ -45,7 +55,26 @@ export class EditorBridge {
 		// git runs the editor through a POSIX shell (also on Windows, where Git
 		// for Windows brings sh), so single quotes are the safe quoting.
 		const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-		return new EditorBridge(server, socketPath, token, `${quote(node)} ${quote(script)}`);
+
+		// Unlike the editor, git and ssh run the askpass program directly, with
+		// no shell: it has to be an executable file, not a command line.
+		let askpassFile: string | null = null;
+		if (askpassScript !== undefined) {
+			const windows = process.platform === 'win32';
+			const file = windows ? askpassScript.replace(/\.sh$/, '.bat') : askpassScript;
+			const body = windows
+				? '@echo off\r\n"%GIT_GRAPH_NEXT_NODE%" "%GIT_GRAPH_NEXT_SCRIPT%" --askpass %*\r\n'
+				: '#!/bin/sh\nexec "$GIT_GRAPH_NEXT_NODE" "$GIT_GRAPH_NEXT_SCRIPT" --askpass "$@"\n';
+			try {
+				mkdirSync(dirname(file), { recursive: true });
+				writeFileSync(file, body, { mode: 0o700 });
+				if (!windows) chmodSync(file, 0o700);
+				askpassFile = file;
+			} catch {
+				askpassFile = null;
+			}
+		}
+		return new EditorBridge(server, socketPath, token, `${quote(node)} ${quote(script)}`, node, script, askpassFile);
 	}
 
 	/**
@@ -54,9 +83,35 @@ export class EditorBridge {
 	 */
 	environment(): Record<string, string> {
 		return {
-			GIT_EDITOR: this.command,
-			GIT_SEQUENCE_EDITOR: this.command,
+			GIT_EDITOR: `${this.command} --editor`,
+			GIT_SEQUENCE_EDITOR: `${this.command} --editor`,
+			...this.common()
+		};
+	}
+
+	/**
+	 * Environment that lets git and ssh ask for passwords and passphrases in
+	 * VS Code (#755, #813). Empty when the helper could not be written; git
+	 * then fails with "terminal prompts disabled" and the view offers to run
+	 * the command in a terminal instead.
+	 */
+	askpassEnvironment(): Record<string, string> {
+		if (this.askpassFile === null) return {};
+		return {
+			GIT_ASKPASS: this.askpassFile,
+			SSH_ASKPASS: this.askpassFile,
+			// ssh asks the program only when it has no terminal; `force` makes it
+			// ask regardless, which is what is needed inside an editor.
+			SSH_ASKPASS_REQUIRE: 'force',
+			...this.common()
+		};
+	}
+
+	private common(): Record<string, string> {
+		return {
 			ELECTRON_RUN_AS_NODE: '1',
+			GIT_GRAPH_NEXT_NODE: this.node,
+			GIT_GRAPH_NEXT_SCRIPT: this.script,
 			GIT_GRAPH_NEXT_EDITOR_SOCKET: this.socketPath,
 			GIT_GRAPH_NEXT_EDITOR_TOKEN: this.token
 		};
@@ -65,10 +120,11 @@ export class EditorBridge {
 	dispose(): void {
 		this.server.close();
 		if (process.platform !== 'win32') rmSync(this.socketPath, { force: true });
+		if (this.askpassFile !== null) rmSync(this.askpassFile, { force: true });
 	}
 }
 
-function serve(socket: Socket, token: string, handler: EditHandler): void {
+function serve(socket: Socket, token: string, handler: BridgeHandler): void {
 	let buffer = '';
 	socket.setEncoding('utf8');
 	socket.on('error', () => socket.destroy());
@@ -85,13 +141,15 @@ function serve(socket: Socket, token: string, handler: EditHandler): void {
 	});
 }
 
-async function answer(socket: Socket, line: string, token: string, handler: EditHandler): Promise<void> {
-	let ok = false;
+async function answer(socket: Socket, line: string, token: string, handler: BridgeHandler): Promise<void> {
+	let reply: { ok: boolean; value?: string } = { ok: false };
 	try {
-		const request = JSON.parse(line) as { file?: unknown; token?: unknown };
-		if (request.token === token && typeof request.file === 'string') ok = await handler(request.file);
+		const request = JSON.parse(line) as { kind?: unknown; value?: unknown; token?: unknown };
+		if (request.token === token && (request.kind === 'edit' || request.kind === 'prompt') && typeof request.value === 'string') {
+			reply = await handler({ kind: request.kind, value: request.value });
+		}
 	} catch {
-		ok = false;
+		reply = { ok: false };
 	}
-	if (!socket.destroyed) socket.end(`${JSON.stringify({ ok })}\n`);
+	if (!socket.destroyed) socket.end(`${JSON.stringify(reply)}\n`);
 }

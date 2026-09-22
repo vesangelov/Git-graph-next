@@ -25,6 +25,9 @@ Open the graph from the **Git Graph Next** icon in the Activity Bar, the **Git G
 - **Compact** mode folds long stretches of linear history into single rows, so the branching structure fits on one screen.
 - Issue references such as `#123` become links — automatically for GitHub and GitLab, and through your own rules for Jira or anything else.
 - Git notes are marked on commits and shown in their details.
+- Hover a commit to bring out the line of the branch it is on; a detached HEAD is shown where it is.
+- Staged and working tree changes can be shown as two separate rows.
+- Open a second graph tab to compare two repositories, or two places in one history, side by side.
 
 ### Search and filter
 
@@ -40,7 +43,8 @@ Open the graph from the **Git Graph Next** icon in the Activity Bar, the **Git G
 
 - **Code review**: start one on a commit, on two selected commits, or on a branch against the current one (everything since they forked, as a pull request shows it). Every file you open is marked reviewed; **Alt+]** and **Alt+[** go to the next and previous file not yet reviewed, right from the diff editor. Reviews are kept per workspace and can be resumed after a restart.
 - **All Changes** opens every changed file of a commit or comparison in one scrolling editor.
-- **Select two commits** to compare them; open a file as it was at a commit, or compare it with your working copy.
+- **Select two commits** to compare them, or compare any commit with your working tree; open a file as it was at a commit, or compare it with your working copy.
+- **Go to Branch, Tag or Stash…** jumps to anything in the graph.
 - **Open External Directory Diff** in your graphical diff tool (`diff.guitool`).
 
 ### Act on it
@@ -59,7 +63,7 @@ Open the graph from the **Git Graph Next** icon in the Activity Bar, the **Git G
 - Copy a commit's link, or open it on GitHub, GitLab or Bitbucket.
 - When a merge, rebase, cherry-pick or revert stops at a conflict, a banner offers **Continue** and **Abort**.
 
-Every action shows exactly what it will do before it runs, and destructive ones are marked as such. When git needs a password it cannot ask for here, you are offered to run the same command in a terminal. **Show Git Output** (in **More**) lists every git command the actions ran.
+Every action shows exactly what it will do before it runs, and destructive ones are marked as such. When git or ssh needs a password or a key passphrase, it is asked for in VS Code. **Show Git Output** (in **More**) lists every git command the actions ran.
 
 ## Settings
 
@@ -77,6 +81,8 @@ All settings are under **Git Graph Next** in the Settings editor. The ones most 
 | `git-graph-next.commitOrdering` | `date`, `author-date` or `topological`. |
 | `git-graph-next.repository.sign.commits` / `.sign.tags` | Sign what the graph creates. |
 | `git-graph-next.fetchAvatars` | Show author avatars (off by default — see Privacy). |
+| `git-graph-next.separateStagedChanges` | Staged and working tree changes as two rows. |
+| `git-graph-next.openOnStartup` | Open the graph automatically in windows with a repository. |
 
 ## Performance
 

@@ -4,7 +4,7 @@ import { GitLogReader, needsParentRewriting, refGlobArgs, type LogRequest } from
 import { GitRefReader, type RefsResult } from './refs.ts';
 import { rewriteParents } from '../graph/rewrite.ts';
 import { commitWebUrl, parseRemoteUrl, resolveIssueLinks, type IssueLinkSetting, type RemoteInfo } from './remote.ts';
-import { UNCOMMITTED, type Commit, type GraphData, type Hash, type LogFilter, type Stash } from '../types.ts';
+import { STAGED, UNCOMMITTED, type Commit, type GraphData, type Hash, type LogFilter, type Stash } from '../types.ts';
 
 export interface GraphDataRequest {
 	readonly filter: LogFilter;
@@ -14,6 +14,8 @@ export interface GraphDataRequest {
 	readonly includeCommitsMentionedByReflogs: boolean;
 	readonly showUncommittedChanges: boolean;
 	readonly showUntrackedFiles: boolean;
+	/** Show staged and unstaged changes as separate rows (#575). */
+	readonly separateStaged?: boolean;
 	/** Mark commits that have git notes (#475). */
 	readonly showNotes?: boolean;
 	/** Configured issue-link rules (#313). */
@@ -22,6 +24,28 @@ export interface GraphDataRequest {
 	readonly issueLinkAutoDetect?: boolean;
 	/** Follow the single path in `filter.paths` across renames. */
 	readonly followRenames: boolean;
+}
+
+/**
+ * Counts `git status --porcelain -z` entries by where the change is: staged
+ * (the index differs from HEAD), unstaged (the working tree differs from the
+ * index), or either. A file can be both, e.g. staged and then edited again.
+ */
+export function countStatusByStage(stdout: string): { staged: number; unstaged: number; total: number } {
+	const fields = stdout.split('\0');
+	let staged = 0;
+	let unstaged = 0;
+	let total = 0;
+	for (let i = 0; i < fields.length; i++) {
+		const field = fields[i];
+		if (field.length < 4) continue;
+		const [index, worktree] = [field[0], field[1]];
+		total++;
+		if (index !== ' ' && index !== '?') staged++;
+		if (worktree !== ' ') unstaged++;
+		if (index === 'R' || index === 'C') i++;
+	}
+	return { staged, unstaged, total };
 }
 
 /**
@@ -87,10 +111,10 @@ export function insertStashes(commits: readonly Commit[], stashes: readonly Stas
 }
 
 /** The synthetic row standing for changes in the working tree and index. */
-export function uncommittedCommit(headHash: Hash, changes: number): Commit {
+export function uncommittedCommit(headHash: Hash, changes: number, hash: Hash = UNCOMMITTED, subject?: string): Commit {
 	const now = Math.floor(Date.now() / 1000);
 	return {
-		hash: UNCOMMITTED,
+		hash,
 		parents: [headHash],
 		author: '*',
 		authorEmail: '',
@@ -98,7 +122,7 @@ export function uncommittedCommit(headHash: Hash, changes: number): Commit {
 		committer: '*',
 		committerEmail: '',
 		committerDate: now,
-		subject: `Uncommitted Changes (${changes})`,
+		subject: subject ?? `Uncommitted Changes (${changes})`,
 		body: '',
 		stash: null
 	};
@@ -188,16 +212,26 @@ export async function loadGraphData(git: GitExecutor, repoPath: string, request:
 	]);
 
 	let commits = insertStashes(log.commits, stashes);
-	const changes = status !== null ? countStatusEntries(status) : 0;
+	const counts = status !== null ? countStatusByStage(status) : { staged: 0, unstaged: 0, total: 0 };
 	const uncommittedParent = pathFiltered && !rewrite ? (headInPaths?.trim() || null) : state.headHash;
-	if (changes > 0 && uncommittedParent !== null) {
-		commits = [uncommittedCommit(uncommittedParent, changes), ...commits];
+	if (counts.total > 0 && uncommittedParent !== null) {
+		if (request.separateStaged === true) {
+			// Working tree on top of the index, index on top of HEAD (#575).
+			const rows: Commit[] = [];
+			if (counts.staged > 0) rows.push(uncommittedCommit(uncommittedParent, counts.staged, STAGED, `Staged Changes (${counts.staged})`));
+			if (counts.unstaged > 0) {
+				rows.unshift(uncommittedCommit(counts.staged > 0 ? STAGED : uncommittedParent, counts.unstaged, UNCOMMITTED, `Working Tree Changes (${counts.unstaged})`));
+			}
+			commits = [...rows, ...commits];
+		} else {
+			commits = [uncommittedCommit(uncommittedParent, counts.total), ...commits];
+		}
 	}
 	if (ancestry !== null) commits = rewriteParents(commits, ancestry);
 
 	// With a branch selection that leaves out HEAD, the uncommitted row would
 	// hang from a commit that is not drawn; leave it out instead.
-	if (commits[0]?.hash === UNCOMMITTED && branches.length > 0) {
+	if ((commits[0]?.hash === UNCOMMITTED || commits[0]?.hash === STAGED) && branches.length > 0) {
 		const shown = new Set(commits.map((commit) => commit.hash));
 		if (!commits[0].parents.every((parent) => shown.has(parent))) commits = commits.slice(1);
 	}

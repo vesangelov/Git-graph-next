@@ -65,6 +65,8 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | All Changes | `vscode.changes` (multi-diff editor, VS Code 1.86+), feature-detected at run time; falls back to the first file's diff | Keeps `engines` at 1.85. |
 | Webview → host values | Every `ChangeTarget` is validated at the controller boundary (`src/view/validation.ts`); branch names for review must not look like options | Found in session 11: read paths (selectCommit, openDiff) had never validated hashes, only the actions did. |
 | Avatars | Opt-in (`fetchAvatars`, off); fetched on the host for rows on screen; Gravatar by MD5 of the address, GitHub for no-reply addresses; 500-entry cache | Privacy: it tells third parties which authors appear. README's Privacy section says so. |
+| Credential prompts (session 12) | The bridge script gained `--askpass`; `GIT_ASKPASS` / `SSH_ASKPASS` point at a generated executable, `SSH_ASKPASS_REQUIRE=force`; the answer goes back over the socket and is never stored | Push / pull / fetch now work without a credential helper (#755, #813, #730, #876). |
+| Staged vs unstaged rows (#575) | Setting `separateStagedChanges`; synthetic `STAGED` hash; `{hash: UNCOMMITTED, base: STAGED}` means working tree against the index | Keeps one `ChangeTarget` shape for every comparison. |
 | Filter scope | Per repository, persisted in the panel's webview state; the sidebar never filters | Keeps the sidebar a quick overview. |
 | Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
 | Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
@@ -288,10 +290,27 @@ Session 11 — Phase 5: code review, parity, quick wins. **132/132 tests pass,
 - Tests: CR in commit messages (#935/#880), actions for remotes / user /
   tag force / archive, avatar URLs, URL links, target validation, review UI.
 
+Session 12 — the wanted features that were still missing. **134/134 tests
+pass, `tsc --noEmit` clean, packaged and installed.** Awaiting live
+verification.
+
+- Credential and passphrase prompts in VS Code (#755, #813, #730, #876, #672):
+  `src/editor/client.ts` `--askpass` mode, `EditorBridge.askpassEnvironment`,
+  `askForSecret` in extension.ts; tested end to end with `git credential fill`.
+- Staged / working tree rows (#575) with Stage All and Unstage All.
+- Several graph tabs (#610, #747); Go to Branch, Tag or Stash (#521, #608);
+  open on startup (#673); compare a commit with the working tree (#782);
+  detached HEAD in the graph (#678); "+N" for many refs on one row (#777);
+  hover brings out a branch's line (#270); keyboard in the branch picker
+  (#484).
+
 ### Not started
 
-- Not done from the original: export of settings (low value). Worktrees and
-  submodules (#668, #790, #778, #789) are not specially handled.
+- Deliberately not done: web extension (#687, needs a git implementation
+  without a child process), drag and drop (#701), export of the graph as an
+  image (#750), localisation (#762, #788), reverse order (#645, `--reverse`
+  breaks the child-before-parent order the layout needs), settings export.
+- Worktrees and submodules (#668, #790, #778, #789) are not specially handled.
 - The user's decisions above (publisher, repository URL) and the first publish.
 - Windows: CI will show whether the suite passes there.
 - #675 (restore the graph tab after a restart): the serializer exists since
@@ -369,6 +388,10 @@ Verified empirically against git 2.53. These cost debugging time once already.
 19. **The snap Firefox** cannot see `/tmp` (use a non-hidden home folder),
     and its `--screenshot` hangs after a compositor error; drive it through
     `firefox.geckodriver` (WebDriver) instead.
+20. **`GIT_ASKPASS` is executed directly, not through a shell** (verified):
+    a quoted command line fails with "cannot exec". It must be an executable
+    file — a `.sh` on Unix, a `.bat` on Windows. `GIT_EDITOR` *is* run through
+    a shell, so a command line works there.
 
 ---
 
@@ -646,3 +669,14 @@ never validated; all targets are now checked at the boundary.
 
 **Next action:** live check of code review (Alt+] from the diff editor,
 resume after restart), then the publisher / repository decisions.
+
+### Session 12 — 2026-09-22
+
+**Goal:** the remaining features users of the original asked for.
+
+Picked by demand from the 311 open issues (session 10's comparison). The
+askpass work needed fact 20, found by a test that failed with "cannot exec".
+
+**Stopped at:** built, installed, awaiting the user's live check.
+
+**Next action:** publisher and repository decisions, then the first publish.

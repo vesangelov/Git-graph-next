@@ -80,7 +80,8 @@ export interface GraphRenderInput {
 	readonly first: number;
 	readonly last: number;
 	readonly headHash: Hash | null;
-	readonly uncommittedHash: Hash;
+	/** Synthetic rows (uncommitted, staged), drawn as open circles. */
+	readonly uncommittedHashes: ReadonlySet<Hash>;
 	/** Hashes of stash rows, drawn with a distinct marker. */
 	readonly stashHashes: ReadonlySet<Hash>;
 	/** Stand-in rows for collapsed runs (#387), drawn as a dashed ring. */
@@ -116,6 +117,8 @@ export function renderGraph(svg: SVGSVGElement, input: GraphRenderInput): void {
 		path.setAttribute('d', edgePath(edge, geometry, rowCount));
 		path.setAttribute('class', edge.dashed ? 'edge dashed' : 'edge');
 		path.setAttribute('stroke', edge.dashed ? 'currentColor' : colour(edge.colour));
+		// Lets the view dim every other line while one is hovered (#270).
+		path.setAttribute('data-lane', String(edge.colour));
 		edgeLayer.appendChild(path);
 	}
 
@@ -126,13 +129,14 @@ export function renderGraph(svg: SVGSVGElement, input: GraphRenderInput): void {
 		const stroke = colour(vertex.colour);
 
 		const circle = document.createElementNS(SVG_NS, 'circle');
+		circle.setAttribute('data-lane', String(vertex.colour));
 		circle.setAttribute('cx', String(cx));
 		circle.setAttribute('cy', String(cy));
 		if (input.collapsedHashes?.has(vertex.hash) === true) {
 			circle.setAttribute('r', '4.5');
 			circle.setAttribute('class', 'vertex collapsed');
 			circle.setAttribute('stroke', stroke);
-		} else if (vertex.hash === input.uncommittedHash) {
+		} else if (input.uncommittedHashes.has(vertex.hash)) {
 			circle.setAttribute('r', '4');
 			circle.setAttribute('class', 'vertex uncommitted');
 		} else if (vertex.hash === input.headHash) {

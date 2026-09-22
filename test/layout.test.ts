@@ -137,7 +137,7 @@ test('the uncommitted changes row draws a dashed edge', () => {
 		{ ...commit('head'), hash: uncommitted, parents: [pad('head')] },
 		commit('head')
 	];
-	const layout = layoutGraph(commits, { uncommittedHash: uncommitted });
+	const layout = layoutGraph(commits, { dashedRows: new Set([uncommitted]) });
 
 	const edge = layout.edges.find((e) => e.fromIndex === 0);
 	assert.ok(edge !== undefined);

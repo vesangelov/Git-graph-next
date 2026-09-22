@@ -1,4 +1,4 @@
-import { PendingOperation, UNCOMMITTED, type Commit, type GitAction, type GraphData } from '../src/types.ts';
+import { PendingOperation, STAGED, UNCOMMITTED, isUncommittedRow, type Commit, type GitAction, type GraphData } from '../src/types.ts';
 import type { ViewConfig } from '../src/view/protocol.ts';
 import type { Dialog, DialogField, DialogSpec, DialogValues } from './dialog.ts';
 import { shortHash } from './format.ts';
@@ -78,7 +78,7 @@ const mainline = (commit: Commit, values: DialogValues) => (commit.parents.lengt
 
 /** Actions on a commit row. */
 export function commitActions(ctx: ActionContext, commit: Commit): MenuItem[] {
-	if (commit.hash === UNCOMMITTED) return uncommittedActions(ctx);
+	if (isUncommittedRow(commit.hash)) return uncommittedActions(ctx, commit);
 	if (commit.stash !== null) return stashActions(ctx, commit);
 
 	const hash = commit.hash;
@@ -765,8 +765,14 @@ function stashActions(ctx: ActionContext, commit: Commit): MenuItem[] {
 	];
 }
 
-function uncommittedActions(ctx: ActionContext): MenuItem[] {
+function uncommittedActions(ctx: ActionContext, commit: Commit): MenuItem[] {
+	const staged = commit.hash === STAGED;
+	const split = staged || commit.parents[0] === STAGED;
 	return [
+		// With the two rows apart (#575), each offers the move that fits it.
+		...(split && staged ? [{ label: 'Unstage All Changes', action: () => void runNow(ctx, { kind: 'unstageAll' }, 'Unstaging') }] : []),
+		...(split && !staged ? [{ label: 'Stage All Changes', action: () => void runNow(ctx, { kind: 'stageAll' }, 'Staging') }] : []),
+		...(split ? [{ separator: true as const }] : []),
 		{ label: 'Create Patch…', action: () => void runNow(ctx, { kind: 'createPatch', hashes: [] }, 'Creating the patch') },
 		{ label: 'Apply Patch…', action: () => applyPatchDialog(ctx) },
 		{ separator: true },

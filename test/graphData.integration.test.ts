@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { GitExecutor } from '../src/git/executor.ts';
 import { countStatusEntries, insertStashes, loadGraphData, readNote, type GraphDataRequest } from '../src/git/graphData.ts';
 import { dedupePaths, discoverRepositories, scanForNestedRepositories } from '../src/git/repository.ts';
-import { UNCOMMITTED, emptyFilter, type Commit, type Stash } from '../src/types.ts';
+import { readChanges } from '../src/git/changes.ts';
+import { STAGED, UNCOMMITTED, emptyFilter, type Commit, type Stash } from '../src/types.ts';
 
 let root: string;
 let git: GitExecutor;
@@ -299,4 +300,28 @@ test('a carriage return in a commit message does not break the graph (issues #93
 	const data = await loadGraphData(git, repo, request);
 	assert.deepEqual(data.commits.map((c) => c.subject.replace(/\r/g, '⏎')), ['last', 'windows⏎ line', 'first']);
 	assert.equal(data.commits[1].parents[0], data.commits[2].hash, 'the records after it are still aligned');
+});
+
+test('shows staged and unstaged changes as separate rows, each with its own files (#575)', async () => {
+	const repo = initRepo(join(root, 'staged'));
+	commitFile(repo, 'a.txt', 'a\n', 'first');
+	const head = fixture(repo, 'rev-parse', 'HEAD').trim();
+	writeFileSync(join(repo, 'staged.txt'), 'staged\n');
+	fixture(repo, 'add', 'staged.txt');
+	writeFileSync(join(repo, 'a.txt'), 'edited\n');
+	writeFileSync(join(repo, 'new.txt'), 'untracked\n');
+
+	const together = await loadGraphData(git, repo, request);
+	assert.equal(together.commits[0].subject, 'Uncommitted Changes (3)');
+
+	const apart = await loadGraphData(git, repo, { ...request, separateStaged: true });
+	assert.deepEqual(apart.commits.slice(0, 2).map((c) => c.subject), ['Working Tree Changes (2)', 'Staged Changes (1)']);
+	assert.deepEqual(apart.commits[0].parents, [STAGED], 'the working tree sits on top of the index');
+	assert.deepEqual(apart.commits[1].parents, [head], 'and the index on top of HEAD');
+
+	const stagedFiles = await readChanges(git, { repo, hash: STAGED, base: head });
+	assert.deepEqual(stagedFiles.map((c) => [c.type, c.path]), [['A', 'staged.txt']]);
+	const workingFiles = await readChanges(git, { repo, hash: UNCOMMITTED, base: STAGED });
+	assert.deepEqual(workingFiles.map((c) => [c.type, c.path]), [['M', 'a.txt'], ['U', 'new.txt']]);
+	assert.deepEqual((await readChanges(git, { repo, hash: UNCOMMITTED, base: head })).map((c) => c.path), ['a.txt', 'new.txt', 'staged.txt'], 'together, everything not committed');
 });

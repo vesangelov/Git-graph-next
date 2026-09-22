@@ -102,6 +102,14 @@ export class SearchBar {
 		this.element.hidden = true;
 	}
 
+	/** Puts a query in the box and runs it at once. */
+	setQuery(text: string): void {
+		this.input.value = text;
+		window.clearTimeout(this.inputTimer);
+		this.inputTimer = 0;
+		this.callbacks.onQuery(text);
+	}
+
 	/** Runs a query whose debounce has not fired yet. */
 	flush(): void {
 		if (this.inputTimer === 0) return;

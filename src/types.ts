@@ -10,6 +10,18 @@ export type Hash = string;
 /** The synthetic hash used for the Uncommitted Changes row. */
 export const UNCOMMITTED: Hash = '*'.repeat(40);
 
+/**
+ * The synthetic hash of the Staged Changes row, when staged and unstaged
+ * changes are shown separately (#575). A target of `{hash: UNCOMMITTED, base:
+ * STAGED}` is then the working tree against the index.
+ */
+export const STAGED: Hash = '+'.repeat(40);
+
+/** True for the synthetic rows: the working tree, and the index when separate. */
+export function isUncommittedRow(hash: Hash): boolean {
+	return hash === UNCOMMITTED || hash === STAGED;
+}
+
 export const RefType = {
 	Head: 'head',
 	RemoteHead: 'remoteHead',
@@ -344,6 +356,9 @@ export type GitAction =
 	| { readonly kind: 'stashDrop'; readonly selector: string }
 	| { readonly kind: 'stashBranch'; readonly selector: string; readonly name: string }
 	/** Discards uncommitted changes to tracked files (`reset --hard HEAD`). */
+	/** `git add --all` / `git reset` for the staged and working-tree rows (#575). */
+	| { readonly kind: 'stageAll' }
+	| { readonly kind: 'unstageAll' }
 	| { readonly kind: 'discardChanges' }
 	| { readonly kind: 'cleanUntracked'; readonly directories: boolean }
 	| { readonly kind: 'continueOperation'; readonly operation: PendingOperation }
