@@ -24,7 +24,7 @@ const config: ViewConfig = {
 	colours: ['#0085d9', '#d9008f', '#00d90a'], graphStyle: 'rounded', dateType: 'Author Date', dateFormat: 'Date & Time', stickyHeader: true,
 	combineLocalAndRemoteBranchLabels: true, showRemoteHeads: true, maxCommits: 300, loadMoreCommits: 100, loadMoreCommitsAutomatically: true,
 	showRemoteBranches: true, showTags: true, pinnedBranches: ['main'], branchColours: [['main', '#ff0000']], colourRows: true,
-	fetchAndPrune: false, fetchAndPruneTags: false
+	tagsOnRight: true, fetchAndPrune: false, fetchAndPruneTags: false
 };
 
 /** A linear main of 30 commits, a feature branch off commit 20, a tag, and uncommitted changes. */
@@ -172,4 +172,62 @@ test('searches, and folds history in compact mode', async () => {
 	await flush();
 	assert.ok(doc().querySelector('.row.commit.collapsed') !== null, 'a folded run');
 	assert.ok(doc().querySelectorAll('.row.commit').length < before);
+});
+
+function click(element: Element, init: MouseEventInit = {}): void {
+	element.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true, ...init }));
+}
+const rowFor = (n: number) => [...doc().querySelectorAll('.row.commit')].find((r) => r.textContent?.includes(`commit ${n} `))!;
+
+test('compares two ctrl-clicked commits, and offers actions for the selection', async () => {
+	// Leave compact mode from the previous test, so every commit has a row.
+	(([...doc().querySelectorAll('.toolbar button')].find((b) => b.textContent === 'Compact')) as HTMLElement).click();
+	await flush();
+	click(rowFor(4));
+	click(rowFor(2), { ctrlKey: true });
+	await flush();
+	const compare = lastPosted('selectCommit')!;
+	assert.deepEqual(compare.target, { repo: '/repo', hash: h(2), base: h(4) }, 'older → newer');
+	assert.match(doc().querySelector('.details-title')!.textContent!, /^Comparing/);
+
+	click(rowFor(3), { ctrlKey: true });
+	rightClick(rowFor(3));
+	menuItem('Squash 3 Commits…').click();
+	(doc().querySelector('.dialog form') as HTMLFormElement).requestSubmit();
+	const squash = lastPosted('runAction')!;
+	assert.deepEqual(squash.action, { kind: 'rewriteCommits', commits: [h(4), h(3), h(2)], base: h(5), operation: 'squash', review: false });
+	send({ type: 'actionResult', requestId: squash.requestId, error: null });
+	await flush();
+});
+
+test('offers rewriting only for the current branch’s history', async () => {
+	click(rowFor(10));
+	rightClick(rowFor(10));
+	for (const label of ['Create Fixup Commit…', 'Autosquash Fixups into This Commit…', 'Interactive Rebase from Here…', 'Drop This Commit…', 'Create Patch…']) menuItem(label);
+	menuItem('Interactive Rebase from Here…').click();
+	(doc().querySelector('.dialog form') as HTMLFormElement).requestSubmit();
+	assert.deepEqual(lastPosted('runAction')!.action, { kind: 'rebase', onto: h(10), interactive: true, autosquash: true });
+	send({ type: 'actionResult', requestId: lastPosted('runAction')!.requestId, error: null });
+	await flush();
+
+	// The feature branch's tip is not in main's history: no rewriting there.
+	rightClick(rowFor(100));
+	const labels = [...doc().querySelectorAll('.context-menu .item')].map((i) => i.textContent);
+	assert.ok(!labels.includes('Drop This Commit…'));
+	assert.ok(labels.includes('Rebase main onto ' + h(100).slice(0, 8) + '…'));
+	doc().dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+});
+
+test('deletes several branches, with merged ones pre-ticked', async () => {
+	const more = [...doc().querySelectorAll('.toolbar button')].find((b) => b.textContent === 'More ▾') as HTMLElement;
+	more.click();
+	menuItem('Delete Several Branches…').click();
+	const query = lastPosted('query')!;
+	send({ type: 'queryResult', requestId: query.requestId, value: ['main', 'feature'] });
+	await flush();
+	const boxes = [...doc().querySelectorAll<HTMLInputElement>('.dialog-checklist input')];
+	assert.equal(boxes.length, 1, 'the current branch is not offered');
+	assert.equal(boxes[0].checked, true, 'feature is merged, so ticked');
+	(doc().querySelector('.dialog form') as HTMLFormElement).requestSubmit();
+	assert.deepEqual(lastPosted('runAction')!.action, { kind: 'deleteBranches', names: ['feature'], force: false });
 });

@@ -75,6 +75,8 @@ export class SearchBar {
 		this.historyButton = el('button', 'link-button search-history', 'Search older commits');
 		this.historyButton.title = 'Look for the next match in commits that are not loaded yet, and load up to it';
 		this.historyButton.addEventListener('click', () => this.callbacks.onSearchHistory());
+		// Only offered once a query has run out of loaded matches.
+		this.historyButton.hidden = true;
 		const help = el('span', 'search-help', '?');
 		help.title = HELP;
 		const close = this.button('×', 'Close (Escape)', () => this.callbacks.onClose());

@@ -8,7 +8,17 @@ import { SearchBar, type SearchStatus } from './search.ts';
 import { highlightTerms, matchesQuery, parseQuery, type SearchQuery, type SearchRef } from '../src/search/query.ts';
 import { DetailsPane, changeTarget } from './details.ts';
 import { Dialog } from './dialog.ts';
-import { commitActions, fetchDialog, labelActions, pendingOperationActions, runNow, type ActionContext } from './actionMenus.ts';
+import {
+	applyPatchDialog,
+	commitActions,
+	deleteBranchesDialog,
+	fetchDialog,
+	labelActions,
+	pendingOperationActions,
+	runNow,
+	selectionActions,
+	type ActionContext
+} from './actionMenus.ts';
 import { shortHash } from './format.ts';
 import { ContextMenu, type MenuItem } from './menu.ts';
 import { CommitTable, buildLabels, el, type RefLabel } from './render/table.ts';
@@ -138,6 +148,19 @@ fetchButton.addEventListener('contextmenu', (event) => {
 	if (ctx !== null) fetchDialog(ctx);
 });
 
+const moreButton = el('button', 'icon-button filter-toggle', 'More ▾');
+moreButton.title = 'More actions';
+moreButton.addEventListener('click', () => {
+	const ctx = actionContext();
+	if (ctx === null) return;
+	const rect = moreButton.getBoundingClientRect();
+	menu.open(rect.left, rect.bottom + 2, [
+		{ label: 'Fetch…', action: () => fetchDialog(ctx), disabled: ctx.data.remotes.length === 0 },
+		{ label: 'Apply Patch…', action: () => applyPatchDialog(ctx) },
+		{ label: 'Delete Several Branches…', action: () => void deleteBranchesDialog(ctx) }
+	]);
+});
+
 const compactButton = el('button', 'icon-button filter-toggle', 'Compact');
 compactButton.title = 'Fold long runs of linear history into single rows, to see the branch structure';
 compactButton.addEventListener('click', () => toggleCompact());
@@ -145,7 +168,7 @@ compactButton.addEventListener('click', () => toggleCompact());
 const searchButton = el('button', 'icon-button filter-toggle', 'Search');
 searchButton.title = 'Search commits (Ctrl+F)';
 
-toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, fetchButton, compactButton, searchButton, filters.toggleButton, refreshButton);
+toolbar.append(repoLabel, filters.branchButton, remoteLabel, spacer, statusText, fetchButton, moreButton, compactButton, searchButton, filters.toggleButton, refreshButton);
 
 /** Search state (#147). Matches are hashes in row order; `index` points at the current one. */
 const search = {
@@ -183,7 +206,9 @@ message.hidden = true;
 
 const table = new CommitTable({
 	onSelect: (commit, toggle) => selectCommit(commit, toggle),
-	onContextMenu: (event, commit, label) => menu.open(event.clientX, event.clientY, menuItems(commit, label)),
+	onContextMenu: (event, commit, label, selection) =>
+		menu.open(event.clientX, event.clientY, selection.length > 1 ? selectionMenuItems(selection) : menuItems(commit, label)),
+	onSelectMany: (commits) => selectMany(commits),
 	onNearEnd: () => {
 		if (state.config?.loadMoreCommitsAutomatically === true) loadMore();
 	},
@@ -236,6 +261,7 @@ if (mode === 'sidebar') {
 	searchButton.hidden = true;
 	compactButton.hidden = true;
 	fetchButton.hidden = true;
+	moreButton.hidden = true;
 }
 app.append(toolbar, filters.bar, searchBar.element, pendingBanner, message, table.element, details.element, menu.element, filters.popupElement, dialog.element);
 if (mode === 'panel') filters.set(currentFilter());
@@ -547,12 +573,52 @@ function runAction(repo: string, action: GitAction): Promise<string | null> {
 	});
 }
 
+let queryRequests = 0;
+const queryReplies = new Map<number, (value: readonly string[] | null) => void>();
+
 function actionContext(): ActionContext | null {
 	const data = state.data;
 	const config = state.config;
 	const repo = state.repo;
 	if (data === null || config === null || repo === null || data.repo.path !== repo) return null;
-	return { data, config, dialog, run: (action) => runAction(repo, action) };
+	return {
+		data,
+		config,
+		dialog,
+		run: (action) => runAction(repo, action),
+		mergedBranches: () =>
+			new Promise((resolve) => {
+				const requestId = ++queryRequests;
+				queryReplies.set(requestId, resolve);
+				post({ type: 'query', requestId, repo, query: 'mergedBranches' });
+			})
+	};
+}
+
+/** The menu for a multi-selection (#182). */
+function selectionMenuItems(selection: readonly Commit[]): MenuItem[] {
+	const ctx = actionContext();
+	const items: MenuItem[] = ctx !== null ? selectionActions(ctx, selection) : [];
+	const hashes = selection.filter((c) => c.hash !== UNCOMMITTED).map((c) => c.hash);
+	group(items, [{ label: `Copy ${hashes.length} Commit Hashes`, action: () => post({ type: 'copyToClipboard', text: hashes.join('\n'), label: 'commit hashes' }) }]);
+	return items;
+}
+
+/**
+ * Two selected commits are compared in the details pane (and the Changes
+ * view); more than two are listed. Row order is newest first.
+ */
+function selectMany(commits: readonly Commit[]): void {
+	if (state.repo === null) return;
+	window.clearTimeout(selectTimer);
+	if (commits.length === 2) {
+		const [newer, older] = commits;
+		const target = mode === 'panel' ? details.openComparison(state.repo, older, newer) : { repo: state.repo, hash: newer.hash, base: older.hash };
+		const name = (c: Commit) => (c.hash === UNCOMMITTED ? 'working tree' : shortHash(c.hash));
+		post({ type: 'selectCommit', target, title: `${name(older)} → ${name(newer)}`, hasNote: false });
+	} else if (mode === 'panel') {
+		details.openSummary(commits);
+	}
 }
 
 /** The banner for an interrupted merge, rebase, cherry-pick, revert or bisect (#519). */
@@ -564,7 +630,7 @@ function renderPendingBanner(): void {
 		pendingBanner.hidden = true;
 		return;
 	}
-	const noun = { merge: 'A merge', rebase: 'A rebase', 'cherry-pick': 'A cherry-pick', revert: 'A revert', bisect: 'A bisect' }[operation];
+	const noun = { merge: 'A merge', rebase: 'A rebase', 'cherry-pick': 'A cherry-pick', revert: 'A revert', bisect: 'A bisect', am: 'Applying patches (git am)' }[operation];
 	const hint = operation === 'bisect' ? '' : ' Resolve any conflicts and stage the files, then continue — or abort to go back.';
 	const { continue: resume, abort } = pendingOperationActions(ctx, operation);
 	const buttons: HTMLElement[] = [];
@@ -791,6 +857,12 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
 				request(Math.max(state.data.maxCommits, msg.match.position + 1 + state.config.loadMoreCommits));
 			}
 			updateSearchStatus();
+			return;
+		}
+		case 'queryResult': {
+			const reply = queryReplies.get(msg.requestId);
+			queryReplies.delete(msg.requestId);
+			reply?.(msg.value);
 			return;
 		}
 		case 'actionResult': {

@@ -26,6 +26,9 @@
     "theme": "dark"
   },
   "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
   "activationEvents": [
     "onStartupFinished",
     "onWebviewPanel:gitGraphNext.view"
@@ -331,16 +334,6 @@
           "description": "Show each commit's branch colour as a stripe at the start of its row, next to the message.",
           "scope": "window"
         },
-        "git-graph-next.graph.uncommittedChanges": {
-          "type": "string",
-          "enum": [
-            "Open Circle at the Uncommitted Changes",
-            "Open Circle at the Checked Out Commit"
-          ],
-          "default": "Open Circle at the Uncommitted Changes",
-          "description": "How the Uncommitted Changes row is connected to the graph.",
-          "scope": "window"
-        },
         "git-graph-next.graph.stickyHeader": {
           "type": "boolean",
           "default": true,
@@ -474,11 +467,10 @@
           "type": "string",
           "enum": [
             "Normal",
-            "Branches (on the left) & Tags (on the right)",
-            "Branches (aligned to the graph) & Tags (on the right)"
+            "Branches (on the left) & Tags (on the right)"
           ],
           "default": "Normal",
-          "description": "The alignment of branch and tag labels.",
+          "description": "Where branch and tag labels are drawn in the Description column: all before the message, or tags at the right-hand end.",
           "scope": "window"
         },
         "git-graph-next.referenceLabels.combineLocalAndRemoteBranchLabels": {
@@ -590,5 +582,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/git-graph-next/git-graph-next.git"
-  }
+  },
+  "pricing": "Free"
 }

@@ -1,0 +1,38 @@
+name: Release
+
+# Publishes the extension when a version tag (v0.1.0, …) is pushed.
+# Each store is skipped unless its token is configured as a repository secret:
+#   VSCE_PAT  — Visual Studio Marketplace (Azure DevOps personal access token)
+#   OVSX_PAT  — Open VSX, the registry VSCodium and other VS Code builds use
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run vsce:package
+      - name: Check the tag matches package.json
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - name: Publish to the Visual Studio Marketplace
+        if: env.VSCE_PAT != ''
+        run: npx @vscode/vsce publish --no-dependencies --packagePath *.vsix
+      - name: Publish to Open VSX
+        if: env.OVSX_PAT != ''
+        run: npx ovsx publish *.vsix -p "$OVSX_PAT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: '*.vsix'

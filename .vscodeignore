@@ -1,7 +1,10 @@
 # Only the bundled output, the manifest, and the notices ship in the .vsix.
 **
 !dist/**
-!media/**
+# Only the media the extension itself uses; README screenshots are loaded
+# from the repository by the Marketplace, not from the package.
+!media/icon.png
+!media/activity-bar.svg
 !package.json
 !LICENSE
 !NOTICE.md

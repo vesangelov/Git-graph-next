@@ -40,6 +40,8 @@ export class DetailsPane {
 	private readonly files: HTMLElement;
 
 	private target: ChangeTarget | null = null;
+	/** A single commit, a comparison of two (#182), or a summary of more. */
+	private mode: 'single' | 'compare' | 'summary' = 'single';
 	private links: readonly IssueLinkRule[] = [];
 
 	constructor(private readonly callbacks: DetailsCallbacks) {
@@ -73,8 +75,9 @@ export class DetailsPane {
 		return !this.element.hidden;
 	}
 
+	/** The commit shown on its own, or null (nothing, or a multi-selection). */
 	get currentHash(): Hash | null {
-		return this.isOpen ? (this.target?.hash ?? null) : null;
+		return this.isOpen && this.mode === 'single' ? (this.target?.hash ?? null) : null;
 	}
 
 	setHeight(height: number): void {
@@ -82,7 +85,52 @@ export class DetailsPane {
 	}
 
 	/** Shows a commit; its files arrive later through `showChanges`. */
+	/**
+	 * Compares two commits (#182): the files changed from `older` to `newer`.
+	 * Either may be the Uncommitted Changes row, which stands for the working tree.
+	 */
+	openComparison(repo: string, older: Commit, newer: Commit): ChangeTarget {
+		this.mode = 'compare';
+		this.target = { repo, hash: newer.hash, base: older.hash };
+		this.element.hidden = false;
+		const name = (c: Commit) => (c.hash === UNCOMMITTED ? 'working tree' : shortHash(c.hash));
+		this.title.textContent = `Comparing ${name(older)} → ${name(newer)}`;
+		this.title.title = this.title.textContent;
+		const row = (c: Commit) => {
+			const cell = el('span');
+			if (c.hash === UNCOMMITTED) cell.textContent = 'Uncommitted changes';
+			else cell.append(this.commitLink(c.hash), `  ${c.subject}`);
+			return cell;
+		};
+		this.meta.replaceChildren(
+			this.table([
+				['From', row(older)],
+				['To', row(newer)]
+			]),
+			el('div', 'details-message', 'Every change between the two, as one diff per file. Right-click the selection for actions on both commits.')
+		);
+		this.files.replaceChildren(el('div', 'details-note', 'Loading changed files…'));
+		return this.target;
+	}
+
+	/** Lists a multi-selection of more than two commits. */
+	openSummary(commits: readonly Commit[]): void {
+		this.mode = 'summary';
+		this.target = null;
+		this.element.hidden = false;
+		this.title.textContent = `${commits.length} commits selected`;
+		const list = el('div', 'details-message');
+		for (const commit of commits) {
+			const line = el('div');
+			line.append(this.commitLink(commit.hash), `  ${commit.subject}`);
+			list.appendChild(line);
+		}
+		this.meta.replaceChildren(list);
+		this.files.replaceChildren(el('div', 'details-note', 'Right-click the selection for actions on all of them: cherry-pick, revert, squash, drop, create patches.'));
+	}
+
 	open(repo: string, commit: Commit, labels: readonly RefLabel[], links: readonly IssueLinkRule[] = []): void {
+		this.mode = 'single';
 		this.links = links;
 		this.target = changeTarget(repo, commit);
 		this.element.hidden = false;

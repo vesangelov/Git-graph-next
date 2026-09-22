@@ -99,7 +99,10 @@ export function buildLabels(data: GraphData, config: Pick<ViewConfig, 'combineLo
 export interface TableCallbacks {
 	/** `toggle` is true for a plain click, which may close details already open for the row. */
 	onSelect(commit: Commit, toggle: boolean): void;
-	onContextMenu(event: MouseEvent, commit: Commit, label: RefLabel | null): void;
+	/** `selection` is every selected commit, in row order, when the row is part of a multi-selection. */
+	onContextMenu(event: MouseEvent, commit: Commit, label: RefLabel | null, selection: readonly Commit[]): void;
+	/** Two or more commits are selected, in row order (newest first). */
+	onSelectMany(commits: readonly Commit[]): void;
 	onNearEnd(): void;
 	onOpenUrl(url: string): void;
 	/** A label was double-clicked: checking out a branch is the usual intent. */
@@ -136,6 +139,12 @@ export class CommitTable {
 	private model: TableModel | null = null;
 	private geometry: GraphGeometry = DEFAULT_GEOMETRY;
 	private selected: Hash | null = null;
+	/**
+	 * Every selected commit when more than one is (#182): Ctrl/Cmd+click
+	 * toggles a row, Shift+click selects a range from `selected`. Empty for a
+	 * single selection.
+	 */
+	private multi = new Set<Hash>();
 	/** The window currently in the DOM, to skip redundant redraws while scrolling. */
 	private drawn: { first: number; last: number } | null = null;
 	private frame = 0;
@@ -235,6 +244,9 @@ export class CommitTable {
 			collapsed
 		};
 		if (this.selected !== null && !data.commits.some((c) => c.hash === this.selected)) this.selected = null;
+		const loaded = new Set(data.commits.map((c) => c.hash));
+		for (const hash of this.multi) if (!loaded.has(hash)) this.multi.delete(hash);
+		if (this.multi.size < 2) this.multi.clear();
 
 		const graphWidth = Math.max(MIN_GRAPH_WIDTH, graphPixelWidth(layout, this.geometry));
 		this.element.style.setProperty('--graph-width', `${graphWidth}px`);
@@ -340,7 +352,7 @@ export class CommitTable {
 		if (run !== undefined) return this.renderCollapsedRow(model, row, run);
 		const element = el('div', 'row commit');
 		element.dataset.row = String(row);
-		if (commit.hash === this.selected) element.classList.add('selected');
+		if (commit.hash === this.selected || this.multi.has(commit.hash)) element.classList.add('selected');
 		if (commit.hash === UNCOMMITTED) element.classList.add('uncommitted');
 		if (commit.hash === model.data.repo.headHash) element.classList.add('head');
 		if (this.search?.matches.has(commit.hash) === true) {
@@ -358,6 +370,7 @@ export class CommitTable {
 			element.classList.add('coloured');
 			element.style.setProperty('--row-colour', colour);
 		}
+		const rightLabels: HTMLElement[] = [];
 		for (const label of model.labels.get(commit.hash) ?? []) {
 			const tag = el('span', `label ${label.kind}${label.current ? ' current' : ''}`);
 			tag.title = label.title;
@@ -369,7 +382,9 @@ export class CommitTable {
 				part.title = `${remote}/${label.name} is at the same commit`;
 				tag.appendChild(part);
 			}
-			desc.appendChild(tag);
+			// With "tags on the right", tags wait until after the message.
+			if (model.config.tagsOnRight && label.kind === 'tag') rightLabels.push(tag);
+			else desc.appendChild(tag);
 		}
 		const subject = el('span', 'subject');
 		appendMessage(subject, commit.subject, this.search?.matches.has(commit.hash) === true ? this.search.terms : [], model.data.issueLinks);
@@ -380,6 +395,11 @@ export class CommitTable {
 			subject.title = `${shortHash(commit.hash)} · ${who} · ${when}\n\n${subject.title}`;
 		}
 		desc.appendChild(subject);
+		if (rightLabels.length > 0) {
+			const right = el('span', 'right-labels');
+			right.append(...rightLabels);
+			desc.appendChild(right);
+		}
 		element.appendChild(desc);
 
 		const seconds = model.config.dateType === 'Commit Date' ? commit.committerDate : commit.authorDate;
@@ -423,21 +443,81 @@ export class CommitTable {
 			this.callbacks.onExpand(hit.commit.hash);
 			return;
 		}
-		// Right-clicking the selected row must not re-select it: that would toggle its details shut.
-		if (!context || hit.commit.hash !== this.selected) this.select(hit.commit.hash, !context);
+		if (!context && (event.ctrlKey || event.metaKey || event.shiftKey)) {
+			this.extendSelection(hit.row, event.shiftKey);
+			return;
+		}
+		if (context && this.multi.has(hit.commit.hash)) {
+			// Right-clicking inside a multi-selection acts on all of it.
+			event.preventDefault();
+			this.callbacks.onContextMenu(event, hit.commit, hit.label, this.selectedCommits());
+			return;
+		}
+		// A right-click marks the row the menu is for, but opens nothing: the
+		// details belong to a deliberate click.
+		if (context) this.mark(hit.commit.hash);
+		else this.select(hit.commit.hash, true);
 		if (context) {
 			event.preventDefault();
-			this.callbacks.onContextMenu(event, hit.commit, hit.label);
+			this.callbacks.onContextMenu(event, hit.commit, hit.label, [hit.commit]);
 		}
+	}
+
+	/** Selected commits in row order (newest first); a single selection gives one. */
+	selectedCommits(): Commit[] {
+		if (this.model === null) return [];
+		const chosen = this.multi.size > 0 ? this.multi : new Set(this.selected !== null ? [this.selected] : []);
+		return this.model.data.commits.filter((c) => chosen.has(c.hash));
+	}
+
+	/** Ctrl/Cmd+click toggles one row; Shift+click takes every row from the last clicked one. */
+	private extendSelection(row: number, range: boolean): void {
+		const model = this.model;
+		if (model === null) return;
+		const commits = model.data.commits;
+		const selectable = (c: Commit | undefined): c is Commit => c !== undefined && !model.collapsed.has(c.hash);
+		if (this.multi.size === 0 && this.selected !== null) this.multi.add(this.selected);
+
+		if (range && this.selected !== null) {
+			const anchor = commits.findIndex((c) => c.hash === this.selected);
+			const [from, to] = anchor < row ? [anchor, row] : [row, anchor];
+			this.multi = new Set(commits.slice(from, to + 1).filter(selectable).map((c) => c.hash));
+		} else {
+			const hash = commits[row].hash;
+			if (this.multi.has(hash)) this.multi.delete(hash);
+			else if (selectable(commits[row])) this.multi.add(hash);
+			this.selected = hash;
+		}
+		this.refreshSelection();
+
+		const chosen = this.selectedCommits();
+		if (chosen.length >= 2) this.callbacks.onSelectMany(chosen);
+		else if (chosen.length === 1) {
+			this.multi.clear();
+			this.select(chosen[0].hash);
+		}
+	}
+
+	private refreshSelection(): void {
+		if (this.model === null) return;
+		for (const row of this.rowsLayer.children) {
+			const hash = this.model.data.commits[Number((row as HTMLElement).dataset.row)]?.hash;
+			row.classList.toggle('selected', hash !== undefined && (hash === this.selected || this.multi.has(hash)));
+		}
+	}
+
+	/** Highlights a row as the selection without reporting it. */
+	private mark(hash: Hash): void {
+		this.selected = hash;
+		this.multi.clear();
+		this.refreshSelection();
 	}
 
 	private select(hash: Hash, toggle = false): void {
 		if (this.model === null) return;
 		this.selected = hash;
-		for (const row of this.rowsLayer.children) {
-			const index = Number((row as HTMLElement).dataset.row);
-			row.classList.toggle('selected', this.model.data.commits[index]?.hash === hash);
-		}
+		this.multi.clear();
+		this.refreshSelection();
 		const commit = this.model.data.commits.find((c) => c.hash === hash);
 		if (commit !== undefined) this.callbacks.onSelect(commit, toggle);
 	}

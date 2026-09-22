@@ -98,8 +98,10 @@ export class GitExecutor {
 					failures.push(`${candidate}: unrecognised version string "${output.stdout.trim()}"`);
 					continue;
 				}
-				if (compareVersions(version, { major: 2, minor: 4 }) < 0) {
-					failures.push(`${candidate}: git ${version.raw} is too old, 2.4.0 or later is required`);
+				// 2.17 is the oldest git with everything the actions use
+				// (`stash push`, `merge --continue`, `fetch --prune-tags`, …).
+				if (compareVersions(version, { major: 2, minor: 17 }) < 0) {
+					failures.push(`${candidate}: git ${version.raw} is too old, 2.17.0 or later is required`);
 					continue;
 				}
 				return new GitExecutor(candidate, version);
@@ -240,6 +242,12 @@ function runRaw(
 function buildEnvironment(extra: Readonly<Record<string, string>> | undefined): NodeJS.ProcessEnv {
 	return {
 		...process.env,
+		// Never wait for an editor that cannot be seen: accept the default
+		// message. The sequence editor must be set too, or a `sequence.editor`
+		// in the user's config (which beats GIT_EDITOR) would open a terminal
+		// editor with no terminal. Callers that provide an editor override both.
+		GIT_EDITOR: 'true',
+		GIT_SEQUENCE_EDITOR: 'true',
 		...extra,
 		// Keep git's own messages and date formatting predictable for parsing,
 		// while leaving user content (commit messages, paths) untouched.
@@ -252,8 +260,6 @@ function buildEnvironment(extra: Readonly<Record<string, string>> | undefined): 
 		// hidden prompt leaves the extension hanging with no way to answer it.
 		GIT_TERMINAL_PROMPT: '0',
 		GIT_PAGER: 'cat',
-		PAGER: 'cat',
-		// Avoid an editor that never returns for commands that may open one.
-		GIT_EDITOR: 'true'
+		PAGER: 'cat'
 	};
 }

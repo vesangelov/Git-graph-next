@@ -13,6 +13,13 @@ export type DialogField =
 	  }
 	| { readonly type: 'checkbox'; readonly id: string; readonly label: string; readonly value?: boolean; readonly hint?: string }
 	| {
+			/** Several checkboxes; the value is the list of checked `value`s. */
+			readonly type: 'checklist';
+			readonly id: string;
+			readonly label: string;
+			readonly items: readonly { readonly value: string; readonly label: string; readonly checked?: boolean; readonly note?: string }[];
+	  }
+	| {
 			readonly type: 'select';
 			readonly id: string;
 			readonly label: string;
@@ -30,7 +37,7 @@ export interface DialogSpec {
 	readonly danger?: boolean;
 }
 
-export type DialogValues = Readonly<Record<string, string | boolean>>;
+export type DialogValues = Readonly<Record<string, string | boolean | readonly string[]>>;
 
 /**
  * A modal dialog inside the webview, for confirming actions and collecting
@@ -81,8 +88,29 @@ export class Dialog {
 		if (spec.message !== undefined) form.appendChild(el('div', 'dialog-message', spec.message));
 
 		const inputs = new Map<string, HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>();
+		const checklists = new Map<string, { value: string; box: HTMLInputElement }[]>();
 		const required: string[] = [];
 		for (const field of spec.fields ?? []) {
+			if (field.type === 'checklist') {
+				const group = el('div', 'dialog-field checklist');
+				group.appendChild(el('span', 'dialog-label', field.label));
+				const list = el('div', 'dialog-checklist');
+				const boxes: { value: string; box: HTMLInputElement }[] = [];
+				for (const item of field.items) {
+					const row = el('label', 'dialog-check');
+					const box = el('input');
+					box.type = 'checkbox';
+					box.checked = item.checked === true;
+					row.append(box, el('span', '', item.label));
+					if (item.note !== undefined) row.appendChild(el('span', 'dialog-hint inline', item.note));
+					list.appendChild(row);
+					boxes.push({ value: item.value, box });
+				}
+				group.appendChild(list);
+				checklists.set(field.id, boxes);
+				form.appendChild(group);
+				continue;
+			}
 			const row = el('label', `dialog-field ${field.type}`);
 			if (field.type === 'checkbox') {
 				const box = el('input');
@@ -126,8 +154,9 @@ export class Dialog {
 		form.append(error, buttons);
 
 		const values = (): DialogValues => {
-			const result: Record<string, string | boolean> = {};
+			const result: Record<string, string | boolean | readonly string[]> = {};
 			for (const [id, input] of inputs) result[id] = input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : input.value;
+			for (const [id, boxes] of checklists) result[id] = boxes.filter((b) => b.box.checked).map((b) => b.value);
 			return result;
 		};
 		const setBusy = (busy: boolean) => {
@@ -135,6 +164,7 @@ export class Dialog {
 			confirm.disabled = busy;
 			cancel.disabled = busy;
 			for (const input of inputs.values()) input.disabled = busy;
+			for (const boxes of checklists.values()) for (const { box } of boxes) box.disabled = busy;
 			confirm.textContent = busy ? 'Working…' : spec.confirm;
 		};
 

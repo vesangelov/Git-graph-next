@@ -32,6 +32,8 @@ export interface ViewConfig {
 	readonly branchColours: readonly (readonly [string, string])[];
 	/** Tint each commit row with its branch colour (#254). */
 	readonly colourRows: boolean;
+	/** Draw tag labels at the right-hand end of the description. */
+	readonly tagsOnRight: boolean;
 	/** Defaults for the Fetch dialog. */
 	readonly fetchAndPrune: boolean;
 	readonly fetchAndPruneTags: boolean;
@@ -67,6 +69,8 @@ export type HostMessage =
 			readonly match: { readonly hash: Hash; readonly position: number } | null;
 			readonly error: string | null;
 	  }
+	/** The answer to a `query`; null when git could not answer. */
+	| { readonly type: 'queryResult'; readonly requestId: number; readonly value: readonly string[] | null }
 	/** The outcome of a `runAction`: null on success, else the message to show. */
 	| { readonly type: 'actionResult'; readonly requestId: number; readonly error: string | null }
 	| {
@@ -131,6 +135,8 @@ export type WebviewMessage =
 	 * options the graph was loaded with.
 	 */
 	| { readonly type: 'searchHistory'; readonly requestId: number; readonly options: LoadOptions; readonly query: string; readonly fromPosition: number }
+	/** Asks the host for information a dialog needs, e.g. which branches are merged (#184). */
+	| { readonly type: 'query'; readonly requestId: number; readonly repo: string; readonly query: 'mergedBranches' }
 	/** Runs a write action (Phase 3). The host validates it again before running anything. */
 	| { readonly type: 'runAction'; readonly requestId: number; readonly repo: string; readonly action: GitAction }
 	/** Opens an issue link (#313) in the browser. The host accepts http(s) only. */

@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
-import { relative, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { GitExecutor } from './git/executor.ts';
 import { RepoManager } from './repoManager.ts';
 import { GraphPanel, VIEW_TYPE } from './view/panel.ts';
 import { GraphController, type GraphServices } from './view/controller.ts';
 import { GraphSidebarProvider, SIDEBAR_VIEW_ID } from './view/sidebar.ts';
 import { ChangeItem, ChangesService } from './view/changesView.ts';
-import { ActionRunner } from './view/actions.ts';
+import { ActionRunner, type RebaseEditing } from './view/actions.ts';
+import { RebaseEditor } from './view/rebaseEditor.ts';
+import { EditorBridge } from './git/editorBridge.ts';
 import { REVISION_SCHEME, RevisionFileSystem, openChangeDiff, openWorkingFile } from './view/diff.ts';
 import { gitPathCandidates, retainContextWhenHidden, showStatusBarItem } from './config.ts';
 
@@ -37,7 +39,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	const repos = new RepoManager(git, context.workspaceState);
 	const changes = new ChangesService(git);
-	const actions = new ActionRunner(git, () => GraphController.refreshAll());
+	// Interactive rebases and commit messages open in VS Code (#757). Without
+	// the bridge everything else still works; those actions explain why not.
+	const rebaseEditor = new RebaseEditor();
+	let editing: RebaseEditing | null = null;
+	try {
+		const bridge = await EditorBridge.start(join(context.extensionPath, 'dist', 'editor.js'), process.execPath, (file) => rebaseEditor.handle(file));
+		editing = { bridge, ui: rebaseEditor };
+		context.subscriptions.push(bridge);
+	} catch {
+		editing = null;
+	}
+	context.subscriptions.push(rebaseEditor);
+	const actions = new ActionRunner(git, () => GraphController.refreshAll(), editing);
 	const services: GraphServices = { extensionUri: context.extensionUri, git, repos, changes, actions };
 	const sidebar = new GraphSidebarProvider(services);
 	context.subscriptions.push(repos, changes, sidebar, { dispose: () => GraphPanel.disposeCurrent() });

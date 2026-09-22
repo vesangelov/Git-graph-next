@@ -12,6 +12,30 @@ export interface ActionContext {
 	readonly dialog: Dialog;
 	/** Runs an action on the host; resolves to an error message or null. */
 	run(action: GitAction): Promise<string | null>;
+	/** Local branches fully merged into HEAD, from the host; null when unknown. */
+	mergedBranches(): Promise<readonly string[] | null>;
+}
+
+const ancestry = new WeakMap<GraphData, ReadonlySet<string>>();
+
+/**
+ * Loaded commits reachable from HEAD, HEAD included: the history the current
+ * branch's rebase, fixup and drop actions can rewrite. Cached per load.
+ */
+export function historyOfHead(data: GraphData): ReadonlySet<string> {
+	const cached = ancestry.get(data);
+	if (cached !== undefined) return cached;
+	const parents = new Map(data.commits.map((c) => [c.hash, c.parents]));
+	const seen = new Set<string>();
+	const stack = data.repo.headHash !== null ? [data.repo.headHash] : [];
+	while (stack.length > 0) {
+		const hash = stack.pop()!;
+		if (seen.has(hash) || !parents.has(hash)) continue;
+		seen.add(hash);
+		stack.push(...parents.get(hash)!);
+	}
+	ancestry.set(data, seen);
+	return seen;
 }
 
 /** Runs an action with no dialog; a failure is shown in a message box. */
@@ -147,8 +171,17 @@ export function commitActions(ctx: ActionContext, commit: Commit): MenuItem[] {
 		}
 	];
 
+	const inHistory = historyOfHead(ctx.data).has(hash);
+	if (inHistory) items.push({ separator: true }, ...historyActions(ctx, commit));
+	items.push({ separator: true }, {
+		label: 'Create Patch…',
+		action: () => void runNow(ctx, { kind: 'createPatch', hashes: [hash] }, 'Creating the patch')
+	});
+
 	if (current !== null && !isHead) {
-		items.push(mergeItem(ctx, hash, short), rebaseItem(ctx, hash, short), {
+		items.push({ separator: true });
+		if (!inHistory) items.push(mergeItem(ctx, hash, short), rebaseItem(ctx, hash, short));
+		items.push({
 			label: `Reset ${current} to This Commit…`,
 			action: () =>
 				ask(
@@ -200,6 +233,8 @@ function mergeItem(ctx: ActionContext, ref: string, name: string): MenuItem {
 	};
 }
 
+const REWRITE_WARNING = 'Rewritten commits get new hashes: avoid this for commits already pushed and shared.';
+
 function rebaseItem(ctx: ActionContext, onto: string, name: string): MenuItem {
 	const current = ctx.data.repo.head ?? 'HEAD';
 	return {
@@ -209,12 +244,245 @@ function rebaseItem(ctx: ActionContext, onto: string, name: string): MenuItem {
 				ctx,
 				{
 					title: `Rebase ${current} onto ${name}`,
-					message: `The commits of ${current} that are not in ${name} are re-applied on top of it. Their hashes change; avoid this for commits already pushed and shared.`,
+					message: `The commits of ${current} that are not in ${name} are re-applied on top of it. ${REWRITE_WARNING}`,
+					fields: [
+						{ type: 'checkbox', id: 'interactive', label: 'Interactive: edit the list of commits in VS Code first' },
+						{ type: 'checkbox', id: 'autosquash', label: 'Move fixup! and squash! commits into place (--autosquash)' }
+					],
 					confirm: 'Rebase'
 				},
-				() => ({ kind: 'rebase', onto })
+				(v) => ({ kind: 'rebase', onto, interactive: flag(v, 'interactive'), autosquash: flag(v, 'autosquash') })
 			)
 	};
+}
+
+/**
+ * Actions that rewrite the current branch from a commit in its history
+ * (#410, #113, #757, #587). HEAD itself only gets the fixup commands.
+ */
+function historyActions(ctx: ActionContext, commit: Commit): MenuItem[] {
+	const hash = commit.hash;
+	const short = shortHash(hash);
+	const current = ctx.data.repo.head ?? 'HEAD';
+	const isHead = hash === ctx.data.repo.headHash;
+	const parent = commit.parents[0] ?? null;
+	const items: MenuItem[] = [
+		{
+			label: 'Create Fixup Commit…',
+			action: () =>
+				ask(
+					ctx,
+					{
+						title: `Create a fixup commit for ${short}`,
+						message: 'Commits the staged changes as "fixup! …" (or "squash! …"), ready to be folded into this commit by an autosquash rebase.',
+						fields: [
+							{
+								type: 'select',
+								id: 'mode',
+								label: 'Kind',
+								options: [
+									{ value: 'fixup', label: 'fixup! — fold in the changes, keep this commit’s message' },
+									{ value: 'squash', label: 'squash! — fold in, and edit the combined message' }
+								],
+								value: 'fixup'
+							},
+							{ type: 'checkbox', id: 'all', label: 'Include all changes to tracked files, not only staged ones (--all)', value: true }
+						],
+						confirm: 'Create Commit'
+					},
+					(v) => ({ kind: 'commitFixup', target: hash, mode: text(v, 'mode') === 'squash' ? 'squash' : 'fixup', all: flag(v, 'all') })
+				)
+		},
+		{
+			label: 'Autosquash Fixups into This Commit…',
+			action: () =>
+				ask(
+					ctx,
+					{
+						title: `Autosquash from ${short}`,
+						message: `Rebases ${current} from this commit's parent, folding fixup! and squash! commits into the commits they name. ${REWRITE_WARNING}`,
+						fields: [{ type: 'checkbox', id: 'review', label: 'Review the list in VS Code before starting' }],
+						confirm: 'Autosquash'
+					},
+					(v) => ({ kind: 'rebase', onto: parent, interactive: flag(v, 'review'), autosquash: true })
+				)
+		}
+	];
+	if (!isHead) {
+		items.push({
+			label: 'Interactive Rebase from Here…',
+			action: () =>
+				ask(
+					ctx,
+					{
+						title: `Interactive rebase of ${current} after ${short}`,
+						message: `Opens the commits after this one in VS Code: reorder the lines, or change pick to reword, edit, squash, fixup or drop. ${REWRITE_WARNING}`,
+						fields: [{ type: 'checkbox', id: 'autosquash', label: 'Move fixup! and squash! commits into place (--autosquash)', value: true }],
+						confirm: 'Open the List'
+					},
+					(v) => ({ kind: 'rebase', onto: hash, interactive: true, autosquash: flag(v, 'autosquash') })
+				)
+		});
+	}
+	if (commit.parents.length <= 1) {
+		items.push({
+			label: 'Drop This Commit…',
+			action: () =>
+				ask(
+					ctx,
+					{
+						title: `Drop ${short} from ${current}`,
+						message: `Removes this commit from the branch; the commits after it are re-applied without it. ${REWRITE_WARNING}`,
+						fields: [{ type: 'checkbox', id: 'review', label: 'Review the list in VS Code before starting' }],
+						confirm: 'Drop',
+						danger: true
+					},
+					(v) => ({ kind: 'rewriteCommits', commits: [hash], base: parent, operation: 'drop', review: flag(v, 'review') })
+				)
+		});
+	}
+	return items;
+}
+
+/**
+ * Actions on a multi-selection (#182). `commits` are in row order, newest
+ * first; git wants cherry-picks oldest first and reverts newest first.
+ */
+export function selectionActions(ctx: ActionContext, commits: readonly Commit[]): MenuItem[] {
+	const real = commits.filter((c) => c.hash !== UNCOMMITTED && c.stash === null);
+	if (real.length === 0) return [];
+	const newestFirst = real.map((c) => c.hash);
+	const oldestFirst = [...newestFirst].reverse();
+	const n = real.length;
+	const hasMerge = real.some((c) => c.parents.length > 1);
+	const current = ctx.data.repo.head ?? 'HEAD';
+	const items: MenuItem[] = [];
+
+	if (!hasMerge) {
+		items.push(
+			{
+				label: `Cherry-pick ${n} Commits…`,
+				action: () =>
+					ask(
+						ctx,
+						{
+							title: `Cherry-pick ${n} commits onto ${current}`,
+							message: 'They are applied oldest first.',
+							fields: [
+								{ type: 'checkbox', id: 'origin', label: 'Record the original commits in the messages (-x)' },
+								{ type: 'checkbox', id: 'noCommit', label: 'Apply the changes without committing' }
+							],
+							confirm: 'Cherry-pick'
+						},
+						(v) => ({ kind: 'cherryPickMany', hashes: oldestFirst, recordOrigin: flag(v, 'origin'), noCommit: flag(v, 'noCommit') })
+					)
+			},
+			{
+				label: `Revert ${n} Commits…`,
+				action: () =>
+					ask(ctx, { title: `Revert ${n} commits`, message: 'One revert commit each, newest first.', confirm: 'Revert' }, () => ({ kind: 'revertMany', hashes: newestFirst }))
+			}
+		);
+	} else {
+		items.push({ label: 'Cherry-pick / Revert: not for selections with merge commits', action: () => undefined, disabled: true });
+	}
+
+	// Squash and drop rewrite the current branch: every commit must be in its history.
+	const history = historyOfHead(ctx.data);
+	if (!hasMerge && real.every((c) => history.has(c.hash))) {
+		const base = real[real.length - 1].parents[0] ?? null;
+		const review: DialogField = { type: 'checkbox', id: 'review', label: 'Review the list in VS Code before starting' };
+		items.push(
+			{ separator: true },
+			{
+				label: `Squash ${n} Commits…`,
+				action: () =>
+					ask(
+						ctx,
+						{
+							title: `Squash ${n} commits of ${current}`,
+							message: `They become one commit, where the oldest of them is now. ${REWRITE_WARNING}`,
+							fields: [
+								{
+									type: 'select',
+									id: 'mode',
+									label: 'Message',
+									options: [
+										{ value: 'squash', label: 'Combine all messages, and edit the result in VS Code' },
+										{ value: 'fixup', label: 'Keep only the oldest commit’s message' }
+									],
+									value: 'squash'
+								},
+								review
+							],
+							confirm: 'Squash'
+						},
+						(v) => ({ kind: 'rewriteCommits', commits: oldestFirst, base, operation: text(v, 'mode') === 'fixup' ? 'fixup' : 'squash', review: flag(v, 'review') })
+					)
+			},
+			{
+				label: `Drop ${n} Commits…`,
+				action: () =>
+					ask(
+						ctx,
+						{ title: `Drop ${n} commits from ${current}`, message: `They are removed from the branch. ${REWRITE_WARNING}`, fields: [review], confirm: 'Drop', danger: true },
+						(v) => ({ kind: 'rewriteCommits', commits: oldestFirst, base, operation: 'drop', review: flag(v, 'review') })
+					)
+			}
+		);
+	}
+	items.push({ separator: true }, { label: `Create ${n} Patches…`, action: () => void runNow(ctx, { kind: 'createPatch', hashes: oldestFirst }, 'Creating the patches') });
+	return items;
+}
+
+/** Deletes several local branches at once (#184); branches merged into HEAD come pre-ticked. */
+export async function deleteBranchesDialog(ctx: ActionContext): Promise<void> {
+	const merged = new Set((await ctx.mergedBranches()) ?? []);
+	const candidates = ctx.data.heads.filter((h) => h.name !== ctx.data.repo.head).map((h) => h.name).sort((a, b) => a.localeCompare(b));
+	if (candidates.length === 0) {
+		ctx.dialog.alert('Delete branches', 'There are no other local branches.');
+		return;
+	}
+	ask(
+		ctx,
+		{
+			title: 'Delete branches',
+			message: 'Branches already merged into the current branch are ticked. The current branch cannot be deleted.',
+			fields: [
+				{ type: 'checklist', id: 'names', label: 'Branches', items: candidates.map((name) => ({ value: name, label: name, checked: merged.has(name), note: merged.has(name) ? 'merged' : undefined })) },
+				{ type: 'checkbox', id: 'force', label: 'Also delete unmerged branches (-D)' }
+			],
+			confirm: 'Delete',
+			danger: true
+		},
+		(v) => ({ kind: 'deleteBranches', names: (v.names as readonly string[]) ?? [], force: flag(v, 'force') })
+	);
+}
+
+/** Applies patch files, to the working tree or as commits (#538). */
+export function applyPatchDialog(ctx: ActionContext): void {
+	ask(
+		ctx,
+		{
+			title: 'Apply patches',
+			message: 'Choose the patch files in the next step.',
+			fields: [
+				{
+					type: 'select',
+					id: 'mode',
+					label: 'Apply',
+					options: [
+						{ value: 'apply', label: 'To the working tree (git apply)' },
+						{ value: 'am', label: 'As commits, from format-patch files (git am)' }
+					],
+					value: 'apply'
+				},
+				{ type: 'checkbox', id: 'threeWay', label: 'Fall back to a three-way merge on conflicts (--3way)' }
+			],
+			confirm: 'Choose Files…'
+		},
+		(v) => ({ kind: 'applyPatch', mode: text(v, 'mode') === 'am' ? 'am' : 'apply', threeWay: flag(v, 'threeWay') })
+	);
 }
 
 /** Actions on a branch, tag or stash label. */
@@ -323,6 +591,7 @@ export function labelActions(ctx: ActionContext, label: RefLabel, commit: Commit
 						)
 				});
 			}
+			items.push({ label: 'Delete Several Branches…', action: () => void deleteBranchesDialog(ctx) });
 			return items;
 		}
 		case 'remote': {
@@ -450,6 +719,9 @@ function stashActions(ctx: ActionContext, commit: Commit): MenuItem[] {
 
 function uncommittedActions(ctx: ActionContext): MenuItem[] {
 	return [
+		{ label: 'Create Patch…', action: () => void runNow(ctx, { kind: 'createPatch', hashes: [] }, 'Creating the patch') },
+		{ label: 'Apply Patch…', action: () => applyPatchDialog(ctx) },
+		{ separator: true },
 		{
 			label: 'Stash Changes…',
 			action: () =>
@@ -518,7 +790,7 @@ export function fetchDialog(ctx: ActionContext): void {
 
 /** Continue / Abort for an interrupted operation (#519). */
 export function pendingOperationActions(ctx: ActionContext, operation: PendingOperation): { continue: (() => void) | null; abort: () => void } {
-	const noun = operation === PendingOperation.CherryPick ? 'cherry-pick' : operation;
+	const noun = operation === PendingOperation.Am ? 'patch application' : operation;
 	return {
 		continue:
 			operation === PendingOperation.Bisect

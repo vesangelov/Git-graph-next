@@ -38,6 +38,16 @@ const extensionConfig = {
 	external: ['vscode']
 };
 
+/** The editor script git runs for interactive rebases; see src/editor/client.ts. */
+const editorConfig = {
+	...shared,
+	entryPoints: ['src/editor/client.ts'],
+	outfile: 'dist/editor.js',
+	format: 'cjs',
+	platform: 'node',
+	target: 'node20'
+};
+
 /** The webview runs in a browser sandbox with no module loader, so it is one IIFE. */
 const webviewConfig = {
 	...shared,
@@ -64,8 +74,8 @@ const testConfig = {
 if (tests) {
 	await esbuild.build(testConfig);
 } else if (watch) {
-	const contexts = await Promise.all([esbuild.context(extensionConfig), esbuild.context(webviewConfig)]);
+	const contexts = await Promise.all([esbuild.context(extensionConfig), esbuild.context(editorConfig), esbuild.context(webviewConfig)]);
 	await Promise.all(contexts.map((c) => c.watch()));
 } else {
-	await Promise.all([esbuild.build(extensionConfig), esbuild.build(webviewConfig)]);
+	await Promise.all([esbuild.build(extensionConfig), esbuild.build(editorConfig), esbuild.build(webviewConfig)]);
 }

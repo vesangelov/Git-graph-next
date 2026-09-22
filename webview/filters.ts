@@ -31,6 +31,13 @@ export function branchOptions(data: GraphData): BranchOption[] {
 const GROUP_NAMES: Record<BranchOption['kind'], string> = { local: 'Local', remote: 'Remote', tag: 'Tags' };
 
 /**
+ * Rows drawn per group in the picker. Repositories with tens of thousands of
+ * branches exist; drawing them all makes the popup take seconds to open, and
+ * nobody scrolls through them — the search box finds the rest.
+ */
+const MAX_ROWS_PER_GROUP = 300;
+
+/**
  * Normalises a typed path to what git expects: repo-relative, forward
  * slashes, no leading `./` or `/`, no trailing slash.
  */
@@ -327,12 +334,26 @@ export class FilterControls {
 			const needle = search.value.trim().toLowerCase();
 			const rows: HTMLElement[] = [this.branchRow('All Branches', this.filter.branches.length === 0, () => this.update({ branches: [] }))];
 			let lastKind: BranchOption['kind'] | null = null;
+			let shown = 0;
+			let hidden = 0;
+			const flushHidden = () => {
+				if (hidden > 0) rows.push(el('div', 'branch-group more', `… ${hidden} more — type to search`));
+				hidden = 0;
+			};
 			for (const option of this.branches) {
 				if (needle !== '' && !option.name.toLowerCase().includes(needle)) continue;
 				if (option.kind !== lastKind) {
+					flushHidden();
 					rows.push(el('div', 'branch-group', GROUP_NAMES[option.kind]));
 					lastKind = option.kind;
+					shown = 0;
 				}
+				// Selected refs are always shown, so they can be unticked.
+				if (shown >= MAX_ROWS_PER_GROUP && !this.filter.branches.includes(option.ref)) {
+					hidden++;
+					continue;
+				}
+				shown++;
 				const checked = this.filter.branches.includes(option.ref);
 				const row = this.branchRow(option.name, checked, () => {
 					const next = checked ? this.filter.branches.filter((r) => r !== option.ref) : [...this.filter.branches, option.ref];
@@ -344,6 +365,7 @@ export class FilterControls {
 				}
 				rows.push(row);
 			}
+			flushHidden();
 			list.replaceChildren(...rows);
 		};
 		search.addEventListener('input', fill);

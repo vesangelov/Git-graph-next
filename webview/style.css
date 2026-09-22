@@ -1158,3 +1158,56 @@ body.mode-sidebar {
 	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
 	background: var(--vscode-button-secondaryBackground, transparent);
 }
+
+.dialog-checklist {
+	max-height: 40vh;
+	overflow: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px;
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, transparent));
+}
+
+.dialog-check {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+}
+
+.dialog-hint.inline {
+	flex-basis: auto;
+	padding-left: 0;
+}
+
+/* ---- Label alignment -------------------------------------------------- */
+
+/* The description lays out as a row, so the message can shrink with an
+   ellipsis while labels keep their size, and right-hand tags stay visible. */
+.row.commit .cell.desc {
+	display: flex;
+	align-items: center;
+}
+
+.row.commit .cell.desc .label {
+	flex: none;
+}
+
+.row.commit .cell.desc .subject {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.right-labels {
+	flex: none;
+	display: inline-flex;
+	margin-left: 8px;
+}
+
+.right-labels .label:last-child {
+	margin-right: 0;
+}

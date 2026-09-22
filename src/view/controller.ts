@@ -224,6 +224,13 @@ export class GraphController implements vscode.Disposable {
 				}
 				break;
 			}
+			case 'query': {
+				const known = this.services.repos.repositories.some((r) => r.path === message.repo);
+				const output = known ? await this.services.git.runOrNull(message.repo, ['branch', '--merged', 'HEAD', '--format=%(refname:short)']) : null;
+				const value = output === null ? null : output.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+				this.post({ type: 'queryResult', requestId: message.requestId, value });
+				break;
+			}
 			case 'runAction': {
 				const known = this.services.repos.repositories.some((r) => r.path === message.repo);
 				const error = known ? await this.services.actions.run(message.repo, message.action) : `${message.repo} is not a known repository.`;

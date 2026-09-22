@@ -62,6 +62,7 @@ export function viewConfig(): ViewConfig {
 		pinnedBranches: stringList('graph.pinnedBranches'),
 		branchColours: branchColours(),
 		colourRows: read('graph.colourCommitRows', false),
+		tagsOnRight: oneOf('referenceLabels.alignment', ['Normal', 'Branches (on the left) & Tags (on the right)'], 'Normal') !== 'Normal',
 		fetchAndPrune: read('repository.fetchAndPrune', false),
 		fetchAndPruneTags: read('repository.fetchAndPruneTags', false)
 	};

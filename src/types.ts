@@ -257,7 +257,9 @@ export const PendingOperation = {
 	Rebase: 'rebase',
 	CherryPick: 'cherry-pick',
 	Revert: 'revert',
-	Bisect: 'bisect'
+	Bisect: 'bisect',
+	/** `git am`, applying patches (#538). */
+	Am: 'am'
 } as const;
 export type PendingOperation = (typeof PendingOperation)[keyof typeof PendingOperation];
 
@@ -288,7 +290,40 @@ export type GitAction =
 			readonly force: 'none' | 'with-lease' | 'force';
 	  }
 	| { readonly kind: 'merge'; readonly ref: string; readonly noFastForward: boolean; readonly squash: boolean; readonly noCommit: boolean }
-	| { readonly kind: 'rebase'; readonly onto: string }
+	/**
+	 * Rebases the current branch. `onto` null means `--root`. Interactive opens
+	 * git's todo list in a VS Code editor (#757, #113); autosquash moves
+	 * `fixup!` / `squash!` commits into place (#587, #410).
+	 */
+	| { readonly kind: 'rebase'; readonly onto: string | null; readonly interactive: boolean; readonly autosquash: boolean }
+	/** `git commit --fixup` / `--squash` for a commit (#410). */
+	| { readonly kind: 'commitFixup'; readonly target: Hash; readonly mode: 'fixup' | 'squash'; readonly all: boolean }
+	/**
+	 * Squashes or drops selected commits of the current branch (#182) with an
+	 * interactive rebase from `base` (the oldest commit's parent; null for a
+	 * root). `commits` are oldest first. With `review`, the rewritten todo list
+	 * is shown in the editor before the rebase starts.
+	 */
+	| {
+			readonly kind: 'rewriteCommits';
+			readonly commits: readonly Hash[];
+			readonly base: Hash | null;
+			readonly operation: 'squash' | 'fixup' | 'drop';
+			readonly review: boolean;
+	  }
+	/** Cherry-picks several commits, oldest first (#182). */
+	| { readonly kind: 'cherryPickMany'; readonly hashes: readonly Hash[]; readonly recordOrigin: boolean; readonly noCommit: boolean }
+	/** Reverts several commits, newest first (#182). */
+	| { readonly kind: 'revertMany'; readonly hashes: readonly Hash[] }
+	/** Deletes several local branches at once (#184). */
+	| { readonly kind: 'deleteBranches'; readonly names: readonly string[]; readonly force: boolean }
+	/**
+	 * Writes patches (#538): one file per commit (oldest first), or the
+	 * uncommitted changes when `hashes` is empty. The host asks where.
+	 */
+	| { readonly kind: 'createPatch'; readonly hashes: readonly Hash[] }
+	/** Applies patch files the host asks for (#538): to the working tree, or as commits (`git am`). */
+	| { readonly kind: 'applyPatch'; readonly mode: 'apply' | 'am'; readonly threeWay: boolean }
 	| { readonly kind: 'cherryPick'; readonly hash: Hash; readonly mainline: number | null; readonly noCommit: boolean; readonly recordOrigin: boolean }
 	| { readonly kind: 'revert'; readonly hash: Hash; readonly mainline: number | null }
 	| { readonly kind: 'reset'; readonly hash: Hash; readonly mode: 'soft' | 'mixed' | 'hard' }

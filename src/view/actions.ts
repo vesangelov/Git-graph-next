@@ -1,9 +1,20 @@
 import * as vscode from 'vscode';
 import type { GitExecutor } from '../git/executor.ts';
 import { GitError, CancelledError } from '../git/executor.ts';
-import { InvalidActionError, checkRefNames, describeAction, isCredentialFailure, planAction, shellCommand, validateAction } from '../git/actions.ts';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { InvalidActionError, checkRefNames, checkRewrite, describeAction, isCredentialFailure, planAction, rewriteTodo, shellCommand, validateAction } from '../git/actions.ts';
+import type { EditorBridge } from '../git/editorBridge.ts';
+import { applyPatches, commitPatch, commitSubject, patchFileName, uncommittedPatch } from '../git/patches.ts';
 import { actionOptions, integratedTerminalShell } from '../config.ts';
+import type { RebaseEditor, RebaseJob } from './rebaseEditor.ts';
 import type { GitAction } from '../types.ts';
+
+/** The editor bridge and the UI behind it; null when the bridge could not start. */
+export interface RebaseEditing {
+	readonly bridge: EditorBridge;
+	readonly ui: RebaseEditor;
+}
 
 /**
  * Runs write actions (Phase 3) against repositories.
@@ -19,7 +30,8 @@ export class ActionRunner {
 	constructor(
 		private readonly git: GitExecutor,
 		/** Reloads the graph views once an action has changed the repository. */
-		private readonly onDidRun: () => void
+		private readonly onDidRun: () => void,
+		private readonly editing: RebaseEditing | null
 	) {}
 
 	/** Runs an action; resolves to null on success, or to the message to show. */
@@ -39,22 +51,40 @@ export class ActionRunner {
 		}
 		const invalidName = await checkRefNames(this.git, repo, action);
 		if (invalidName !== null) return invalidName;
+		if (action.kind === 'rewriteCommits') {
+			const unsafe = await checkRewrite(this.git, repo, action);
+			if (unsafe !== null) return unsafe;
+		}
+		if (action.kind === 'createPatch' || action.kind === 'applyPatch') return this.runPatch(repo, action);
 
 		const commands = planAction(action, actionOptions());
+		const needsEditor = commands.some((command) => command.editor === true);
+		if (needsEditor && this.editing === null) return 'Editing in VS Code is unavailable, so this action cannot run here. Run it in a terminal instead.';
+		const job = this.rebaseJob(action);
+		let registration: vscode.Disposable | undefined;
+		if (job !== null && this.editing !== null) {
+			const gitDir = (await this.git.runOrNull(repo, ['rev-parse', '--absolute-git-dir']))?.trim();
+			if (gitDir === undefined || gitDir === '') return 'Could not find the repository’s git directory.';
+			registration = this.editing.ui.register(gitDir, job);
+		}
 		const network = commands.some((command) => command.network);
 		const title = describeAction(action);
 
 		try {
 			await vscode.window.withProgress(
 				{
-					// Network operations can take long and may be cancelled; local
-					// ones finish quickly and only need a hint in the status bar.
-					location: network ? vscode.ProgressLocation.Notification : vscode.ProgressLocation.Window,
+					// Network operations and editing sessions can take long and may
+					// be cancelled; the rest finish quickly and only need a hint in
+					// the status bar.
+					location: network || needsEditor ? vscode.ProgressLocation.Notification : vscode.ProgressLocation.Window,
 					title: `${title}…`,
-					cancellable: network
+					cancellable: network || needsEditor
 				},
 				async (_progress, token) => {
-					for (const command of commands) await this.git.run(repo, command.args, { token });
+					for (const command of commands) {
+						const env = command.editor === true ? this.editing!.bridge.environment() : undefined;
+						await this.git.run(repo, command.args, { token, ...(env !== undefined ? { env } : {}) });
+					}
 				}
 			);
 			return null;
@@ -67,9 +97,70 @@ export class ActionRunner {
 			}
 			return message;
 		} finally {
+			registration?.dispose();
 			// Even a failed action can change the repository (a merge stopped at
 			// a conflict is still a merge in progress), so always reload.
 			this.onDidRun();
+		}
+	}
+
+	/** What the editor bridge does with the todo list of an action's rebase, if it has one. */
+	private rebaseJob(action: GitAction): RebaseJob | null {
+		if (action.kind === 'rewriteCommits') {
+			return { transform: (todo) => rewriteTodo(todo, action.commits, action.operation), reviewTodo: action.review };
+		}
+		if (action.kind === 'rebase' && action.interactive) return { reviewTodo: true };
+		return null;
+	}
+
+	/**
+	 * Creates or applies patches (#538). The file locations come from VS
+	 * Code's own dialogs, never from the view; cancelling a dialog is not an
+	 * error, the action simply does nothing.
+	 */
+	private async runPatch(repo: string, action: Extract<GitAction, { kind: 'createPatch' | 'applyPatch' }>): Promise<string | null> {
+		try {
+			if (action.kind === 'applyPatch') {
+				const files = await vscode.window.showOpenDialog({
+					canSelectMany: true,
+					defaultUri: vscode.Uri.file(repo),
+					openLabel: action.mode === 'am' ? 'Apply as Commits' : 'Apply',
+					filters: { Patches: ['patch', 'diff', 'mbox', 'eml'], 'All Files': ['*'] }
+				});
+				if (files === undefined || files.length === 0) return null;
+				await applyPatches(this.git, repo, files.map((file) => file.fsPath), action.mode, action.threeWay);
+				return null;
+			}
+
+			if (action.hashes.length === 0) {
+				const patch = await uncommittedPatch(this.git, repo);
+				if (patch.length === 0) return 'There are no changes to tracked files to put in a patch.';
+				const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(join(repo, 'uncommitted-changes.patch')), saveLabel: 'Save Patch' });
+				if (target === undefined) return null;
+				await writeFile(target.fsPath, patch);
+				return null;
+			}
+
+			if (action.hashes.length === 1) {
+				const name = patchFileName(1, await commitSubject(this.git, repo, action.hashes[0]));
+				const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(join(repo, name)), saveLabel: 'Save Patch' });
+				if (target === undefined) return null;
+				await writeFile(target.fsPath, await commitPatch(this.git, repo, action.hashes[0]));
+				return null;
+			}
+
+			const folder = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, defaultUri: vscode.Uri.file(repo), openLabel: 'Save Patches Here' });
+			if (folder === undefined || folder.length === 0) return null;
+			for (const [index, hash] of action.hashes.entries()) {
+				const name = patchFileName(index + 1, await commitSubject(this.git, repo, hash));
+				await writeFile(join(folder[0].fsPath, name), await commitPatch(this.git, repo, hash));
+			}
+			void vscode.window.showInformationMessage(`Saved ${action.hashes.length} patches to ${folder[0].fsPath}.`);
+			return null;
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		} finally {
+			if (action.kind === 'applyPatch') this.onDidRun();
 		}
 	}
 

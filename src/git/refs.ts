@@ -20,8 +20,16 @@ const REF_FIELDS = [
 	'%(upstream:track)',
 	'%(symref)'
 ] as const;
-const REF_FORMAT = `--format=${REF_FIELDS.join('%00')}%00`;
 const FIELDS_PER_REF = REF_FIELDS.length;
+
+/**
+ * The same seven fields, split by what they cost. `%(objecttype)` and
+ * `%(*objectname)` make git open every ref's object, which only tags need:
+ * with 20k branches that alone is a third of a second. Branches get those two
+ * fields empty; tags get the upstream fields empty. `parseRefs` reads both.
+ */
+const BRANCH_FORMAT = `--format=%(refname)%00%(objectname)%00%00%00%(upstream:short)%00%(upstream:track)%00%(symref)%00`;
+const TAG_FORMAT = `--format=%(refname)%00%(objectname)%00%(objecttype)%00%(*objectname)%00%00%00%00`;
 
 export interface RefsResult {
 	readonly heads: readonly HeadRef[];
@@ -136,14 +144,11 @@ export class GitRefReader {
 	}
 
 	async readRefs(remotes: readonly string[]): Promise<RefsResult> {
-		const stdout = await this.git.run(this.repoPath, [
-			'for-each-ref',
-			REF_FORMAT,
-			'refs/heads',
-			'refs/remotes',
-			'refs/tags'
+		const [branches, tags] = await Promise.all([
+			this.git.run(this.repoPath, ['for-each-ref', BRANCH_FORMAT, 'refs/heads', 'refs/remotes']),
+			this.git.run(this.repoPath, ['for-each-ref', TAG_FORMAT, 'refs/tags'])
 		]);
-		return parseRefs(stdout, remotes);
+		return parseRefs(branches + tags, remotes);
 	}
 
 	/**
@@ -212,6 +217,8 @@ export class GitRefReader {
 		const { join } = await import('node:path');
 		const has = (...parts: string[]) => existsSync(join(gitDir, ...parts));
 
+		// `git am` and the old rebase backend share rebase-apply; am marks it.
+		if (has('rebase-apply', 'applying')) return PendingOperation.Am;
 		if (has('rebase-merge') || has('rebase-apply')) return PendingOperation.Rebase;
 		if (has('MERGE_HEAD')) return PendingOperation.Merge;
 		if (has('CHERRY_PICK_HEAD')) return PendingOperation.CherryPick;

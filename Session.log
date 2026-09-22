@@ -58,14 +58,17 @@ Issue numbers referenced below (`#70`, `#207`, …) are issues in
 | Action UI | Own dialogs in the webview; errors stay in the dialog | A mistyped name can be fixed in place. Destructive actions are marked (warning border, red button). |
 | Credentials | Prompts stay disabled; on a credential failure the host offers "Run in Terminal" with the same command (shell-quoted) | A hidden prompt would hang forever; the terminal can prompt. |
 | Webview testing | `test/webview.smoke.test.ts` boots the real webview in jsdom and drives it with host messages | Added in session 8: the UI had grown too large to rely on the type checker and live checks alone. |
+| Interactive rebase (#757, #113) | git's own editor protocol: `GIT_SEQUENCE_EDITOR`/`GIT_EDITOR` = a bundled script (`dist/editor.js`) run with VS Code's Node (`ELECTRON_RUN_AS_NODE`), talking to the extension over a local socket with a per-session token; the file opens in a normal VS Code editor with Start/Cancel; closing the tab = done | git builds the list itself, so every rebase option works; no reimplementation of the todo format. |
+| Squash / drop selected commits (#182) | The same bridge rewrites git's own todo lines (`rewriteTodo`), optionally shown for review; refused off the current branch, over merges, or with a stale base (`checkRewrite`) | Only the lines for the chosen commits change. |
+| Patches (#538) | Paths come only from VS Code's file dialogs on the host, never from the view; `format-patch` per commit, `git diff --binary HEAD` for uncommitted changes; apply with `git apply` or `git am` | Nothing from the webview becomes a path. |
 | Filter scope | Per repository, persisted in the panel's webview state; the sidebar never filters | Keeps the sidebar a quick overview. |
 | Unimplemented commands | Removed from `package.json` until built | Contributed-but-unregistered commands fail with "command not found". To re-add: `viewLineHistory`, `clearAvatarCache`, `resumeWorkspaceCodeReview`, `endAllWorkspaceCodeReviews`, `openDiffOfCommit`, and their `editor/title`, `editor/context`, `explorer/context` (file) menu entries. |
 | Dev loop | `npm run package && npx vsce package --no-dependencies && code --install-extension git-graph-next-0.1.0.vsix --force`, then *Developer: Reload Window* | The user verifies each step live in their own VS Code. The user commits; Claude does not. |
 
 ### Deferred / not yet decided
 
-- Marketplace publisher identity (`publisher` in `package.json` is a placeholder).
-- Extension icon. `media/icon.png` is a generated placeholder so packaging works; replace in Phase 4.
+- **Marketplace publisher identity** (`publisher` in `package.json` is a placeholder). Needs the user: an Azure DevOps organisation, a publisher id, a `VSCE_PAT` secret; optionally an Open VSX namespace and `OVSX_PAT`.
+- **Repository URL** (`repository` in `package.json` is a placeholder). vsce rewrites the README's relative image links to it, so screenshots on the Marketplace stay broken until it points at the real public repository.
 - Whether to support `vscode.dev` (#687). The `GitExecutor` seam exists; nothing depends on the answer yet.
 
 ---
@@ -224,10 +227,48 @@ Session 8 — Phase 3 foundation and the basic actions. **114/114 tests pass,
 - Tests: `test/actions.integration.test.ts` (12, real repos incl. a bare
   remote), `test/webview.smoke.test.ts` (6).
 
+Session 9 — the rest of Phase 3. **125/125 tests pass, `tsc --noEmit`
+clean, packaged and installed.** Awaiting live verification. **Phase 3
+complete.**
+
+- `src/editor/client.ts` → `dist/editor.js`; `src/git/editorBridge.ts`;
+  `src/view/rebaseEditor.ts` (status bar Start/Cancel, notification).
+- `src/git/actions.ts`: `rewriteTodo`, `checkRewrite`; new kinds `rebase`
+  (interactive / autosquash / root), `commitFixup`, `rewriteCommits`,
+  `cherryPickMany`, `revertMany`, `deleteBranches`, `createPatch`,
+  `applyPatch`. `src/git/patches.ts`. `PendingOperation.Am`.
+- Table multi-selection (Ctrl/Cmd+click, Shift+click); two commits are
+  compared in the details pane and the Changes view; more are listed.
+- Menus: history-only actions (fixup/squash commit, autosquash, interactive
+  rebase from here, drop), selection actions, Delete Several Branches (merged
+  pre-ticked, via a `query` message), patches; toolbar "More ▾".
+- Tests: `test/rebase.integration.test.ts` (8; real `rebase -i` through the
+  real bridge and script), 3 more smoke tests.
+
+Session 10 — Phase 4. **125/125 tests pass, `tsc --noEmit` clean, packaged
+(79 KB) and installed.** Awaiting live verification and the user's release
+decisions.
+
+- Performance pass (fact 17): `readRefs` split into two `for-each-ref` calls
+  (300 → ~130 ms on 20k refs); branch picker caps each group at 300 rows.
+- Icon (`media/icon.png`, 256 px), README with three screenshots rendered from
+  the real webview bundle in headless Firefox (`media/screenshots/`, not
+  shipped in the .vsix), CHANGELOG.
+- `.github/workflows/ci.yml` (Linux/macOS blocking, Windows reported only)
+  and `release.yml` (tag `v*` → Marketplace and Open VSX when the secrets
+  exist, after checking the tag matches `package.json`).
+- Settings: `referenceLabels.alignment` implemented (tags on the right);
+  `graph.uncommittedChanges` removed; minimum git raised to 2.17 (enforced).
+- `extensionKind: workspace`, keywords, `pricing`.
+- Found by the screenshots: "Search older commits" showed before any search;
+  right-click opened the details pane. Both fixed.
+
 ### Not started
 
-Rest of Phase 3: #182 multi-commit operations, #410 fixup/squash, #113 /
-#757 / #587 interactive rebase, #184 delete several branches, #538 patches.
+- The user's decisions above (publisher, repository URL) and the first publish.
+- Windows: CI will show whether the suite passes there.
+- #675 (restore the graph tab after a restart): the serializer exists since
+  Phase 1; needs a live check.
 
 ---
 
@@ -279,6 +320,28 @@ Verified empirically against git 2.53. These cost debugging time once already.
     prints "CONFLICT … Automatic merge failed" to stdout with an empty
     stderr; `GitExecutor.run` falls back to stdout for the error message, or
     the user would see just "exited with code 1". Found by a test.
+14. **Editor failure semantics** (verified): a failing *sequence* editor
+    aborts `rebase -i` cleanly with no state left — safe as "Cancel"; a
+    failing *message* editor (reword/squash) stops the rebase midway, which
+    then shows as a pending rebase. Todo lines are `pick <abbrev> # subject`.
+15. **`sequence.editor` in user config beats `GIT_EDITOR`.** Only the
+    `GIT_SEQUENCE_EDITOR` env variable beats it, so the executor sets that
+    default too; otherwise `rebase -i` would open an invisible terminal editor
+    and hang.
+16. **`.git/rebase-apply` is shared by `git am` and the old rebase backend;**
+    `rebase-apply/applying` marks am. Check it first.
+17. **Performance limits are git's, not the view's** (measured session 10 on
+    100,010 commits / 20,001 branches): layout of 100k rows 86 ms, compact fold
+    105 ms, search over 100k rows 40 ms. The cost is in git: `%(objecttype)` /
+    `%(*objectname)` in `for-each-ref` open every ref's object (only tags need
+    them — split into two calls); `git log --date-order` with many tips is
+    ~4× faster with a commit-graph file (450 → 121 ms). Not written by us: it
+    is a repository change; the README suggests it.
+18. **vsce applies `!` re-includes after exclusions, regardless of order** in
+    `.vscodeignore`: list exactly the files to ship.
+19. **The snap Firefox** cannot see `/tmp` (use a non-hidden home folder),
+    and its `--screenshot` hangs after a compositor error; drive it through
+    `firefox.geckodriver` (WebDriver) instead.
 
 ---
 
@@ -334,27 +397,27 @@ Structurally already supported by `LogFilter` / `layoutGraph`; they need UI.
 - [x] #598 — rich diff for Jupyter notebooks
 - [x] #781 — minimal graph in the side panel (session 3)
 
-### Phase 3 — write actions
+### Phase 3 — write actions (complete, session 9)
 
 `GitRefReader.readState()` already detects interrupted operations, which is what
 makes the continue/abort affordances possible.
 
 - [x] Checkout, branch create/delete/rename, merge, rebase, cherry-pick, revert,
       reset, stash apply/pop/drop, tag create/delete, push, pull, fetch.
-- [ ] #182 — multi-commit operations (select a range, act on it)
-- [ ] #410 — create fixup / squash, and autosquash, from the commit context menu
-- [ ] #113 — complete rebase support
-- [ ] #757 — interactive rebase driven from the VS Code editor
-- [ ] #587 — autosquash option in the rebase dialog
+- [x] #182 — multi-commit operations (select a range, act on it)
+- [x] #410 — create fixup / squash, and autosquash, from the commit context menu
+- [x] #113 — complete rebase support
+- [x] #757 — interactive rebase driven from the VS Code editor
+- [x] #587 — autosquash option in the rebase dialog
 - [x] #519 — `merge --abort`
-- [ ] #184 — delete several branches at once
-- [ ] #538 — create and apply patches
+- [x] #184 — delete several branches at once
+- [x] #538 — create and apply patches
 
 ### Phase 4 — release
 
-- [ ] Extension icon, README with screenshots, CHANGELOG.
-- [ ] Publisher account; `vsce package` in CI.
-- [ ] Performance pass against a repository with 100k+ commits.
+- [x] Extension icon, README with screenshots, CHANGELOG.
+- [ ] Publisher account (user); `vsce package` in CI — CI done.
+- [x] Performance pass against a repository with 100k+ commits.
 - [ ] #675 — restore the graph tab after a VS Code restart.
 
 ---
@@ -503,3 +566,38 @@ Added a jsdom smoke test for the webview, which had been untested at run time.
 (#182) as the base for multi-commit cherry-pick / revert, fixup / squash
 (#410), interactive rebase (#757, #113, #587), and deleting several branches
 (#184).
+
+### Session 9 — 2026-09-22
+
+**Goal:** the rest of Phase 3 (user's request).
+
+The user verified session 8 live and committed it. Read #410, #113, #757,
+#587 and #538 first. Verified git's editor-failure semantics before designing
+the editor bridge (facts 14–16). Built interactive rebase through git's own
+editor protocol, multi-selection with squash / drop / cherry-pick / revert /
+compare, fixup commits and autosquash, deleting several branches, and
+patches. The executor no longer lets its defaults override a caller's editor.
+
+**Stopped at:** Phase 3 complete, installed, awaiting the user's live check.
+
+**Next action:** fix whatever the live check finds; then Phase 4 — icon,
+README with screenshots, CHANGELOG, publisher account and `vsce package` in
+CI, a performance pass against a 100k+ commit repository, and #675 (restoring
+the graph tab after a restart — the serializer exists since Phase 1, so this
+may only need verifying).
+
+### Session 10 — 2026-09-22
+
+**Goal:** Phase 4 — release preparation.
+
+The user verified Phase 3 and will commit sessions 9 and 10 together.
+Measured the real code paths on a generated 100k-commit / 20k-branch
+repository and fixed the ref-reading cost (fact 17). Made the icon,
+screenshots (which also served as a visual check and found two small UI bugs),
+README, CHANGELOG and CI. Removed or implemented the settings that did
+nothing.
+
+**Stopped at:** everything that does not need the user is done.
+
+**Next action:** the user's publisher and repository decisions; then a first
+publish from a `v0.1.0` tag. Check #675 live.
