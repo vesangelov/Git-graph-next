@@ -3,10 +3,10 @@ import type { GitExecutor } from '../git/executor.ts';
 import { GitError, CancelledError } from '../git/executor.ts';
 import { writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { InvalidActionError, checkRefNames, checkRewrite, describeAction, isCredentialFailure, planAction, rewriteTodo, shellCommand, validateAction } from '../git/actions.ts';
+import { InvalidActionError, checkRefNames, checkRewrite, describeAction, isCredentialFailure, planAction, rewriteTodo, shellCommand, shellFlavour, validateAction } from '../git/actions.ts';
 import type { EditorBridge } from '../git/editorBridge.ts';
 import { applyPatches, commitPatch, commitSubject, patchFileName, uncommittedPatch } from '../git/patches.ts';
-import { actionOptions, integratedTerminalShell } from '../config.ts';
+import { actionOptions, defaultTerminalShell, integratedTerminalShell } from '../config.ts';
 import type { RebaseEditor, RebaseJob } from './rebaseEditor.ts';
 import type { GitAction } from '../types.ts';
 
@@ -90,7 +90,7 @@ export class ActionRunner {
 							...(command.network ? this.editing?.bridge.askpassEnvironment() : undefined),
 							...(command.editor === true ? this.editing!.bridge.environment() : undefined)
 						};
-						this.log(repo, shellCommand('git', command.args, false));
+						this.log(repo, shellCommand('git', command.args, 'posix'));
 						const stdout = await this.git.run(repo, command.args, { token, ...(Object.keys(env).length > 0 ? { env } : {}) });
 						if (stdout.trim() !== '') this.output.appendLine(indent(stdout));
 					}
@@ -204,7 +204,11 @@ export class ActionRunner {
 		const shell = integratedTerminalShell();
 		const terminal = vscode.window.createTerminal({ name: 'Git Graph Next', cwd: repo, ...(shell !== '' ? { shellPath: shell } : {}) });
 		terminal.show();
-		terminal.sendText(shellCommand(this.git.binary, args, process.platform === 'win32'));
+		// Quote for the shell this terminal actually runs: the one configured
+		// here, or the one VS Code opens by default. cmd.exe and PowerShell
+		// quote incompatibly, so the wrong guess sends a broken command line.
+		const flavour = shellFlavour(shell !== '' ? shell : defaultTerminalShell(), process.platform);
+		terminal.sendText(shellCommand(this.git.binary, args, flavour));
 	}
 }
 

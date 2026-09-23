@@ -102,6 +102,17 @@ git commit-graph write --reachable
 
 Git Graph Next collects no data. It talks to the network only when you fetch, pull or push, through your own git — and, if you turn on `git-graph-next.fetchAvatars`, to fetch avatars: for each author shown, the MD5 hash of their e-mail address is sent to Gravatar (or their user name to GitHub, for GitHub no-reply addresses). Avatars are off by default.
 
+## Feedback and bug reports
+
+Bugs, feature requests, questions and anything else are welcome.
+
+- **Issues:** <https://github.com/vesangelov/Git-graph-next/issues> — the best place for anything that others may hit too.
+- **E-mail:** <vesangelovdev@gmail.com> — for anything you would rather not file in public.
+
+A bug report goes a long way with your VS Code version, your `git --version`, and what **Show Git Output** (in **More**) printed for the command that went wrong.
+
+Patches are welcome too — see [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is arranged and how to build it. For security issues, see [SECURITY.md](SECURITY.md).
+
 ## About
 
 Git Graph Next is an independent, clean-room project under the MIT licence. It is not a fork of, and not affiliated with, the Git Graph extension by mhutchie; no code from that project was used. See [NOTICE.md](NOTICE.md).

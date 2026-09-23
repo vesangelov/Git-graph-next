@@ -1,0 +1,37 @@
+name: Feature request
+description: Something the graph should be able to do, and cannot yet.
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This extension exists largely because of requests like this one, so
+        they are genuinely welcome.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: |
+        The task, rather than the feature — knowing what you are actually
+        trying to get done often turns up a better answer than the one asked
+        for.
+      placeholder: |
+        I review a colleague's branch every morning and want to see only the
+        commits that are not on main yet …
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: How you picture it working, if you have a picture of it.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you manage today?
+      description: |
+        What you do instead at the moment, in the extension or on the command
+        line. Useful for judging how much a feature would actually save.

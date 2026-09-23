@@ -101,7 +101,7 @@ export class GraphController implements vscode.Disposable {
 		host.webview.html = this.html();
 
 		this.disposables.push(
-			host.webview.onDidReceiveMessage((message: WebviewMessage) => void this.receive(message)),
+			host.webview.onDidReceiveMessage((message: WebviewMessage) => void this.dispatch(message)),
 			host.onDidChangeVisibility(() => {
 				if (host.visible && this.stale) this.reload();
 			}),
@@ -189,6 +189,20 @@ export class GraphController implements vscode.Disposable {
 		if (selected === null) {
 			this.lastLoad = null;
 			this.watch(null);
+		}
+	}
+
+	/**
+	 * Runs one webview message, keeping a failure inside the handler out of the
+	 * extension host's unhandled-rejection log: a malformed message must not be
+	 * able to take the whole controller down, and the reason belongs in the
+	 * output channel where the user can read it.
+	 */
+	private async dispatch(message: WebviewMessage): Promise<void> {
+		try {
+			await this.receive(message);
+		} catch (error) {
+			this.services.output.appendLine(`Handling "${message?.type}" failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 

@@ -9,7 +9,7 @@ import { GraphSidebarProvider, SIDEBAR_VIEW_ID } from './view/sidebar.ts';
 import { ChangeItem, ChangesService } from './view/changesView.ts';
 import { ActionRunner, type RebaseEditing } from './view/actions.ts';
 import { ReviewManager } from './view/review.ts';
-import { AvatarService } from './view/avatars.ts';
+import { AvatarService, avatarCacheFile } from './view/avatars.ts';
 import { RebaseEditor } from './view/rebaseEditor.ts';
 import { EditorBridge } from './git/editorBridge.ts';
 import { REVISION_SCHEME, RevisionFileSystem, openChangeDiff, openWorkingFile } from './view/diff.ts';
@@ -22,6 +22,29 @@ import { gitPathCandidates, openOnStartup, retainContextWhenHidden, showStatusBa
  */
 const ENABLED_CONTEXT = 'gitGraphNext.enabled';
 
+/**
+ * The commands registered when no usable git was found, so that invoking one
+ * reports the reason. Every command that a user can still reach is here; the
+ * rest are behind `gitGraphNext.enabled`, which stays false in that case.
+ */
+const NO_GIT_COMMANDS = [
+	'gitGraphNext.view',
+	'gitGraphNext.viewNewTab',
+	'gitGraphNext.viewForRepo',
+	'gitGraphNext.viewFileHistory',
+	'gitGraphNext.refresh',
+	'gitGraphNext.goTo',
+	'gitGraphNext.addGitRepository',
+	'gitGraphNext.removeGitRepository',
+	'gitGraphNext.clearAvatarCache',
+	'gitGraphNext.review.next',
+	'gitGraphNext.review.previous',
+	'gitGraphNext.review.openAll',
+	'gitGraphNext.review.end',
+	'gitGraphNext.resumeWorkspaceCodeReview',
+	'gitGraphNext.endAllWorkspaceCodeReviews'
+];
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	await vscode.commands.executeCommand('setContext', ENABLED_CONTEXT, false);
 
@@ -33,7 +56,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		// Register the entry points anyway, so using them explains the problem
 		// instead of failing with "command not found".
 		const explain = () => void vscode.window.showErrorMessage(message, { modal: false });
-		for (const id of ['gitGraphNext.view', 'gitGraphNext.viewForRepo', 'gitGraphNext.refresh', 'gitGraphNext.addGitRepository', 'gitGraphNext.removeGitRepository']) {
+		// Every command that stays reachable without git — the whole Command
+		// Palette set, plus the menu entries — or the ones left out fail with
+		// "command not found", which is what this path exists to prevent.
+		for (const id of NO_GIT_COMMANDS) {
 			context.subscriptions.push(vscode.commands.registerCommand(id, explain));
 		}
 		void vscode.window.showErrorMessage(message.split('\n')[0]);
@@ -64,7 +90,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const actions = new ActionRunner(git, () => GraphController.refreshAll(), editing, output);
 	const reviews = new ReviewManager(context.workspaceState, git, changes);
 	changes.setReviewSource((target) => reviews.reviewedFor(target));
-	const avatars = new AvatarService(context.globalState);
+	const avatars = new AvatarService(avatarCacheFile(context.globalStorageUri), context.globalState);
+	context.subscriptions.push(avatars);
 	const services: GraphServices = { extensionUri: context.extensionUri, git, repos, changes, actions, reviews, output, avatars };
 	const sidebar = new GraphSidebarProvider(services);
 	context.subscriptions.push(repos, changes, sidebar, { dispose: () => GraphPanel.disposeAll() });

@@ -526,12 +526,49 @@ export function isCredentialFailure(stderr: string): boolean {
 	return /could not read (Username|Password)|terminal prompts disabled|Authentication failed|Permission denied \(publickey|Host key verification failed|passphrase/i.test(stderr);
 }
 
-/** Quotes arguments for a POSIX shell or PowerShell, for "Run in Terminal". */
-export function shellCommand(binary: string, args: readonly string[], windows: boolean): string {
-	const quote = windows
-		? (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "''")}'`)
-		: (arg: string) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`);
+/**
+ * The shell a command line is quoted for. Windows has two that quote
+ * incompatibly — single quotes are quoting in PowerShell but literal
+ * characters in cmd.exe — so the flavour has to be known, not assumed.
+ */
+export type ShellFlavour = 'posix' | 'powershell' | 'cmd';
+
+/** Characters no shell treats specially, so such an argument needs no quotes. */
+const BARE = /^[\w@%+=:,./-]+$/;
+
+const QUOTE: Record<ShellFlavour, (arg: string) => string> = {
+	// '…' is literal in every POSIX shell; an embedded quote is closed,
+	// escaped and reopened, because nothing escapes inside single quotes.
+	posix: (arg) => (BARE.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`),
+	// PowerShell's '…' is literal too, and doubles an embedded quote.
+	powershell: (arg) => (BARE.test(arg) ? arg : `'${arg.replace(/'/g, "''")}'`),
+	// cmd.exe hands the line to the program, which parses it by the C runtime
+	// rules: "…" groups, \" is a literal quote, and a run of backslashes is
+	// doubled where it precedes one.
+	cmd: (arg) => (BARE.test(arg) ? arg : `"${arg.replace(/(\\*)("|$)/g, (_, slashes: string, quote: string) => slashes + slashes + (quote === '"' ? '\\"' : ''))}"`)
+};
+
+/**
+ * Decides which shell a terminal will run, from an executable path or from
+ * the name of a VS Code terminal profile ("Command Prompt", "Git Bash"). An
+ * empty value means VS Code chooses: PowerShell on Windows, the login shell
+ * everywhere else.
+ */
+export function shellFlavour(shell: string, platform: string): ShellFlavour {
+	const name = shell.toLowerCase().replace(/\\/g, '/').split('/').pop()?.replace(/\.exe$/, '').trim() ?? '';
+	if (name === '') return platform === 'win32' ? 'powershell' : 'posix';
+	if (name === 'cmd' || name === 'command prompt') return 'cmd';
+	if (name === 'pwsh' || name.includes('powershell')) return 'powershell';
+	// bash, sh, zsh, fish, "Git Bash", and every WSL distribution.
+	return 'posix';
+}
+
+/** Quotes a command line for "Run in Terminal", for the shell that will run it. */
+export function shellCommand(binary: string, args: readonly string[], flavour: ShellFlavour): string {
+	const quote = QUOTE[flavour];
 	const exe = quote(binary);
-	// PowerShell needs the call operator to run a quoted executable path.
-	return `${windows && exe.startsWith("'") ? '& ' : ''}${exe} ${args.map(quote).join(' ')}`;
+	// PowerShell reads a quoted string as a value, not a command to run; the
+	// call operator runs it. The other two run a quoted path as it stands.
+	const prefix = flavour === 'powershell' && exe !== binary ? '& ' : '';
+	return `${prefix}${exe} ${args.map(quote).join(' ')}`;
 }

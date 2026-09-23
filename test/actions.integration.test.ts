@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GitExecutor } from '../src/git/executor.ts';
-import { checkRefNames, InvalidActionError, isCredentialFailure, planAction, shellCommand, validateAction } from '../src/git/actions.ts';
+import { checkRefNames, InvalidActionError, isCredentialFailure, planAction, shellCommand, shellFlavour, validateAction } from '../src/git/actions.ts';
 import { GitRefReader } from '../src/git/refs.ts';
 import { PendingOperation, type GitAction } from '../src/types.ts';
 import { gitEnv, gitRunEnv } from './support.ts';
@@ -237,8 +237,33 @@ test('recognises credential failures and quotes commands for a terminal', () => 
 	assert.ok(isCredentialFailure('fatal: could not read Username for \'https://github.com\': terminal prompts disabled'));
 	assert.ok(isCredentialFailure('git@github.com: Permission denied (publickey).'));
 	assert.ok(!isCredentialFailure('error: failed to push some refs'));
-	assert.equal(shellCommand('git', ['push', 'origin', "it's here"], false), `git push origin 'it'\\''s here'`);
-	assert.equal(shellCommand('C:\\Program Files\\Git\\bin\\git.exe', ['push', "a'b"], true), `& 'C:\\Program Files\\Git\\bin\\git.exe' push 'a''b'`);
+	assert.equal(shellCommand('git', ['push', 'origin', "it's here"], 'posix'), `git push origin 'it'\\''s here'`);
+	assert.equal(shellCommand('C:\\Program Files\\Git\\bin\\git.exe', ['push', "a'b"], 'powershell'), `& 'C:\\Program Files\\Git\\bin\\git.exe' push 'a''b'`);
+});
+
+test('quotes for the shell the terminal actually runs', () => {
+	// cmd.exe treats a single quote as an ordinary character, so a PowerShell
+	// line pasted into it pushes literal quotes into the branch name.
+	assert.equal(shellCommand('C:\\Program Files\\Git\\bin\\git.exe', ['push', 'origin', 'a b'], 'cmd'), `"C:\\Program Files\\Git\\bin\\git.exe" push origin "a b"`);
+	// No call operator in cmd, and none in PowerShell for an unquoted name.
+	assert.equal(shellCommand('git', ['fetch'], 'cmd'), 'git fetch');
+	assert.equal(shellCommand('git', ['fetch'], 'powershell'), 'git fetch');
+	// The C runtime reads \" as a literal quote and halves the backslashes
+	// before it, so each one written out has to be doubled.
+	assert.equal(shellCommand('git', ['push', 'origin', 'a"b'], 'cmd'), 'git push origin "a\\"b"');
+	assert.equal(shellCommand('git', ['push', 'origin', 'a\\b c'], 'cmd'), 'git push origin "a\\b c"');
+	assert.equal(shellCommand('git', ['push', 'origin', 'ends\\'], 'cmd'), 'git push origin "ends\\\\"');
+
+	// An explicit shell path, a VS Code profile name, and nothing at all.
+	assert.equal(shellFlavour('C:\\Windows\\System32\\cmd.exe', 'win32'), 'cmd');
+	assert.equal(shellFlavour('Command Prompt', 'win32'), 'cmd');
+	assert.equal(shellFlavour('C:\\Program Files\\PowerShell\\7\\pwsh.exe', 'win32'), 'powershell');
+	assert.equal(shellFlavour('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'win32'), 'powershell');
+	assert.equal(shellFlavour('Git Bash', 'win32'), 'posix');
+	assert.equal(shellFlavour('C:\\Program Files\\Git\\bin\\bash.exe', 'win32'), 'posix');
+	assert.equal(shellFlavour('/bin/zsh', 'darwin'), 'posix');
+	assert.equal(shellFlavour('', 'win32'), 'powershell');
+	assert.equal(shellFlavour('', 'linux'), 'posix');
 });
 
 test('force-pushes a moved tag, and manages remotes and the repository user', async () => {

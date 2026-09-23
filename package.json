@@ -634,7 +634,7 @@
         "git-graph-next.retainContextWhenHidden": {
           "type": "boolean",
           "default": true,
-          "description": "Keep the Git Graph View running in the background when it is not visible. Uses more memory, but restores instantly.",
+          "markdownDescription": "Keep the Git Graph View running in the background when it is not visible, so returning to it restores the selection, the open commit and every commit **Load More** had loaded. Turning this off frees the memory a large graph holds, at the cost of reloading it each time. Applies to views opened afterwards: reopen the tab, or reload the window for the Activity Bar view.",
           "scope": "window"
         },
         "git-graph-next.integratedTerminalShell": {
@@ -703,7 +703,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/git-graph-next/git-graph-next.git"
+    "url": "https://github.com/vesangelov/Git-graph-next.git"
   },
+  "homepage": "https://github.com/vesangelov/Git-graph-next#readme",
+  "bugs": {
+    "url": "https://github.com/vesangelov/Git-graph-next/issues",
+    "email": "vesangelovdev@gmail.com"
+  },
+  "qna": "https://github.com/vesangelov/Git-graph-next/issues",
   "pricing": "Free"
 }

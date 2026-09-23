@@ -102,6 +102,30 @@ export function integratedTerminalShell(): string {
 	return read('integratedTerminalShell', '').trim();
 }
 
+/**
+ * What VS Code would run in a terminal opened with no shell of its own: the
+ * path of the default profile, or its name when the profile only names a
+ * source ("PowerShell", "Git Bash"). Empty when nothing is configured, which
+ * leaves the platform default. Only used to quote a command line correctly —
+ * a wrong guess costs quoting, never a command that runs something else.
+ */
+export function defaultTerminalShell(platform: NodeJS.Platform = process.platform): string {
+	const suffix = platform === 'win32' ? 'windows' : platform === 'darwin' ? 'osx' : 'linux';
+	const terminal = vscode.workspace.getConfiguration('terminal.integrated');
+	const profileName = terminal.get<unknown>(`defaultProfile.${suffix}`);
+	if (typeof profileName !== 'string' || profileName === '') return '';
+	const profiles = terminal.get<unknown>(`profiles.${suffix}`);
+	const profile = typeof profiles === 'object' && profiles !== null ? (profiles as Record<string, unknown>)[profileName] : undefined;
+	if (typeof profile === 'object' && profile !== null) {
+		// `path` may be a list of candidates, most preferred first.
+		const { path, source } = profile as { path?: unknown; source?: unknown };
+		if (typeof path === 'string' && path !== '') return path;
+		if (Array.isArray(path) && typeof path[0] === 'string') return path[0];
+		if (typeof source === 'string' && source !== '') return source;
+	}
+	return profileName;
+}
+
 export function openToActiveEditorRepo(): boolean {
 	return read('openToTheRepoOfTheActiveTextEditorDocument', false);
 }
