@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Ask a question
-    url: https://github.com/vesangelov/Git-graph-next/discussions
-    about: For questions about using the extension, rather than a bug in it.
   - name: E-mail the maintainer
     url: mailto:vesangelovdev@gmail.com
     about: For anything you would rather not post in public, including security issues.
+  - name: Report a security issue privately
+    url: https://github.com/vesangelov/Git-graph-next/security/advisories/new
+    about: Please do not open a public issue for a vulnerability.

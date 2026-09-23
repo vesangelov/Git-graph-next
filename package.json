@@ -1,7 +1,7 @@
 {
   "name": "git-graph-next",
   "displayName": "Git Graph Next",
-  "description": "View a fast, interactive Git graph of your repository, and perform Git actions from the graph.",
+  "description": "A fast, interactive Git graph for VS Code: browse and search your history, review a branch like a pull request, and branch, merge, rebase, cherry-pick and stash straight from the graph.",
   "version": "0.1.0",
   "license": "MIT",
   "publisher": "git-graph-next",
@@ -16,9 +16,22 @@
   "keywords": [
     "git",
     "graph",
-    "log",
+    "git graph",
+    "commit graph",
+    "git history",
+    "git log",
     "history",
-    "branch"
+    "log",
+    "branch",
+    "merge",
+    "rebase",
+    "cherry-pick",
+    "stash",
+    "tag",
+    "diff",
+    "code review",
+    "source control",
+    "visualization"
   ],
   "icon": "media/icon.png",
   "galleryBanner": {
