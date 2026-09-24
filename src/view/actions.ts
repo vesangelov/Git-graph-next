@@ -60,7 +60,7 @@ export class ActionRunner {
 		if (action.kind === 'createPatch' || action.kind === 'applyPatch') return this.runPatch(repo, action);
 		if (action.kind === 'createArchive') return this.runArchive(repo, action);
 
-		const commands = planAction(action, actionOptions());
+		const commands = planAction(action, { ...actionOptions(), forceIfIncludes: this.git.atLeast(2, 30) });
 		const needsEditor = commands.some((command) => command.editor === true);
 		if (needsEditor && this.editing === null) return 'Editing in VS Code is unavailable, so this action cannot run here. Run it in a terminal instead.';
 		const job = this.rebaseJob(action);

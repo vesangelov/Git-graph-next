@@ -23,7 +23,7 @@ let onEdit: (file: string) => boolean = () => true;
 /** Answers the fake credential prompts, in order. */
 const prompts: string[] = [];
 const edited: string[] = [];
-const options = { signCommits: false, signTags: false };
+const options = { signCommits: false, signTags: false, forceIfIncludes: false };
 const env = gitEnv();
 
 const sh = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', env }).trim();

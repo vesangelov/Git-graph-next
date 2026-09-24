@@ -19,6 +19,13 @@ export interface ActionOptions {
 	readonly signCommits: boolean;
 	/** `git-graph-next.repository.sign.tags`: create annotated tags signed. */
 	readonly signTags: boolean;
+	/**
+	 * Add `--force-if-includes` to `--force-with-lease` (git 2.30+). Without it
+	 * the lease is checked against the remote-tracking branch, which any
+	 * background fetch moves to the remote's tip — after which the push
+	 * overwrites commits nobody here has seen, exactly like `--force`.
+	 */
+	readonly forceIfIncludes: boolean;
 }
 
 export class InvalidActionError extends Error {
@@ -275,7 +282,8 @@ export function planAction(action: GitAction, options: ActionOptions): GitComman
 		case 'pull':
 			return [remote('pull', action.mode === 'rebase' ? '--rebase' : action.mode === 'ff-only' ? '--ff-only' : '--no-rebase')];
 		case 'push': {
-			const force = action.force === 'with-lease' ? ['--force-with-lease'] : action.force === 'force' ? ['--force'] : [];
+			const lease = ['--force-with-lease', ...(options.forceIfIncludes ? ['--force-if-includes'] : [])];
+			const force = action.force === 'with-lease' ? lease : action.force === 'force' ? ['--force'] : [];
 			// An explicit refspec: pushes exactly this branch, whatever push.default says.
 			const refspec = `refs/heads/${action.branch}:refs/heads/${action.branch}`;
 			return [remote('push', ...(action.setUpstream ? ['--set-upstream'] : []), ...force, action.remote, refspec)];

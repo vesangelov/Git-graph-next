@@ -93,8 +93,8 @@ export function showUntrackedFiles(): boolean {
 	return read('showUntrackedFiles', true);
 }
 
-/** Settings that shape the git commands of write actions. */
-export function actionOptions(): ActionOptions {
+/** Settings that shape the git commands of write actions; the git version adds the rest. */
+export function actionOptions(): Omit<ActionOptions, 'forceIfIncludes'> {
 	return { signCommits: read('repository.sign.commits', false), signTags: read('repository.sign.tags', false) };
 }
 

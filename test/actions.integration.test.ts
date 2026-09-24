@@ -14,7 +14,7 @@ let root: string;
 let repo: string;
 let origin: string;
 let git: GitExecutor;
-const options = { signCommits: false, signTags: false };
+const options = { signCommits: false, signTags: false, forceIfIncludes: false };
 const env = gitEnv();
 
 function sh(cwd: string, ...args: string[]): string {
@@ -148,6 +148,35 @@ test('pushes a new branch with upstream, force-pushes with lease, deletes it rem
 	await run({ kind: 'checkout', branch: 'main' });
 	await run({ kind: 'deleteRemoteBranch', remote: 'origin', branch: 'pub' });
 	assert.equal(sh(origin, 'branch', '--list', 'pub'), '');
+});
+
+test('a force push with lease refuses to drop work that only a background fetch has seen', async (t) => {
+	if (!git.atLeast(2, 30)) return t.skip('--force-if-includes needs git 2.30');
+	// A colleague pushes to main…
+	const colleague = join(root, 'colleague');
+	execFileSync('git', ['clone', '-q', origin, colleague], { env });
+	for (const [k, v] of [['user.email', 'c@e'], ['user.name', 'C'], ['commit.gpgsign', 'false']]) sh(colleague, 'config', k, v);
+	writeFileSync(join(colleague, 'c.txt'), 'theirs\n');
+	sh(colleague, 'add', '-A');
+	sh(colleague, 'commit', '-q', '-m', "colleague's work");
+	sh(colleague, 'push', '-q', 'origin', 'main');
+
+	// …while here the last commit is rewritten, and a fetch runs in the
+	// background (VS Code's autofetch, or the graph's own Fetch). That moves
+	// origin/main to the colleague's commit, which is all a bare lease checks.
+	sh(repo, 'commit', '-q', '--amend', '-m', 'rewritten here');
+	sh(repo, 'fetch', '-q', 'origin');
+
+	const push: GitAction = { kind: 'push', branch: 'main', remote: 'origin', setUpstream: false, force: 'with-lease' };
+	const [command] = planAction(push, { ...options, forceIfIncludes: true });
+	assert.deepEqual(command.args, ['push', '--force-with-lease', '--force-if-includes', 'origin', 'refs/heads/main:refs/heads/main']);
+	await assert.rejects(git.run(repo, command.args, { env: gitRunEnv() }), /rejected|updated since checkout/);
+	assert.equal(sh(origin, 'log', '-1', '--format=%s', 'main'), "colleague's work", 'the remote keeps the work nobody here has seen');
+
+	// Without the check, the same push goes through and the work is gone.
+	const [bare] = planAction(push, options);
+	await git.run(repo, bare.args, { env: gitRunEnv() });
+	assert.equal(sh(origin, 'log', '-1', '--format=%s', 'main'), 'rewritten here');
 });
 
 test('fetches with prune, and pulls in each mode', async () => {
