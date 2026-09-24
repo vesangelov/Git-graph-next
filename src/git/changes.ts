@@ -150,10 +150,15 @@ function sortChanges(changes: FileChange[]): FileChange[] {
  * Reads a file's bytes at a revision, exactly as stored, or null when the file
  * does not exist there. Bytes rather than text, so binary files and notebooks
  * reach VS Code untouched and it can pick the right editor for them.
+ *
+ * `revision` is a commit hash, or `STAGED` for the file as it is in the index
+ * (`:path` to git) — the side the Staged and Working Tree rows compare
+ * against when they are shown apart (#575).
  */
 export async function readBlobAtRevision(git: GitExecutor, repo: string, revision: Hash, path: string): Promise<Buffer | null> {
+	const object = revision === STAGED ? `:${path}` : `${revision}:${path}`;
 	try {
-		return await git.runBinary(repo, ['show', '--no-textconv', `${revision}:${path}`]);
+		return await git.runBinary(repo, ['show', '--no-textconv', object]);
 	} catch {
 		return null;
 	}

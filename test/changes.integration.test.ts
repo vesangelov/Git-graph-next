@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GitExecutor } from '../src/git/executor.ts';
 import { emptySideContent, parseNameStatus, parseNumstat, readBlobAtRevision, readChanges } from '../src/git/changes.ts';
-import { UNCOMMITTED } from '../src/types.ts';
+import { STAGED, UNCOMMITTED } from '../src/types.ts';
 import { gitEnv } from './support.ts';
 
 let repo: string;
@@ -112,4 +112,19 @@ test('the empty side of a notebook diff is still a valid notebook', () => {
 	const notebook = JSON.parse(emptySideContent('dir/Analysis.IPYNB'));
 	assert.deepEqual(notebook.cells, []);
 	assert.equal(notebook.nbformat, 4);
+});
+
+test('reads the index side of a staged file', async () => {
+	// With staged and unstaged changes as separate rows (#575), one side of
+	// their diffs is the index. It used to be asked for as `++++…:path`, which
+	// git rejects, so that side always came up empty.
+	writeFileSync(join(repo, 'keep.txt'), 'staged\n');
+	fixture('add', 'keep.txt');
+	writeFileSync(join(repo, 'keep.txt'), 'working\n');
+	try {
+		assert.equal((await readBlobAtRevision(git, repo, STAGED, 'keep.txt'))?.toString('utf8'), 'staged\n');
+		assert.match((await readBlobAtRevision(git, repo, hashes.second, 'keep.txt'))?.toString('utf8') ?? '', /line 2 changed/);
+	} finally {
+		fixture('reset', '-q', '--hard');
+	}
 });
