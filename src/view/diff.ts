@@ -3,16 +3,10 @@ import { basename, join } from 'node:path';
 import type { GitExecutor } from '../git/executor.ts';
 import { emptySideContent, readBlobAtRevision } from '../git/changes.ts';
 import { FileChangeType, UNCOMMITTED, type ChangeTarget, type FileChange } from '../types.ts';
+import { parseRevisionQuery, type RevisionQuery } from './validation.ts';
 
 /** URI scheme for read-only file contents at a revision. */
 export const REVISION_SCHEME = 'git-graph-next';
-
-interface RevisionQuery {
-	readonly repo: string;
-	/** Commit to read from; '' stands for "no such file", i.e. an empty side. */
-	readonly revision: string;
-	readonly path: string;
-}
 
 /**
  * A URI for a file at a revision. The path component is the repo-relative
@@ -41,7 +35,11 @@ export class RevisionFileSystem implements vscode.FileSystemProvider {
 	/** Never fires: a file at a revision cannot change. */
 	readonly onDidChangeFile = this.changed.event;
 
-	constructor(private readonly git: GitExecutor) {}
+	constructor(
+		private readonly git: GitExecutor,
+		/** Whether a path is a repository the extension knows, once discovery has finished. */
+		private readonly isKnownRepo: (path: string) => Promise<boolean>
+	) {}
 
 	async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
 		const content = await this.readFile(uri);
@@ -52,12 +50,11 @@ export class RevisionFileSystem implements vscode.FileSystemProvider {
 		const cached = this.cache.get(uri.toString());
 		if (cached !== undefined) return cached;
 
-		let query: RevisionQuery;
-		try {
-			query = JSON.parse(uri.query) as RevisionQuery;
-		} catch {
-			throw vscode.FileSystemError.FileNotFound(uri);
-		}
+		// The scheme belongs to the whole window: anything that can make VS Code
+		// open a URI can hand one in. Only what this extension could have made
+		// — a known repository, a real revision, a path inside it — reaches git.
+		const query = parseRevisionQuery(uri.query);
+		if (query === null || !(await this.isKnownRepo(query.repo))) throw vscode.FileSystemError.FileNotFound(uri);
 		const blob = query.revision === '' ? null : await readBlobAtRevision(this.git, query.repo, query.revision, query.path);
 		// A side that does not exist is shown empty, as the other half of an add or delete.
 		const content = blob ?? Buffer.from(emptySideContent(query.path), 'utf8');

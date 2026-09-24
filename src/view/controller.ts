@@ -14,7 +14,7 @@ import { compareWithWorkingFile, openAllChanges, openChangeDiff, openFileAtRevis
 import type { ReviewManager } from './review.ts';
 import type { AvatarService } from './avatars.ts';
 import type { FilterState, HostMessage, LoadOptions, ViewMode, WebviewMessage } from './protocol.ts';
-import { HASH, isSafeRefName, isValidTarget } from './validation.ts';
+import { HASH, isRepoRelativePath, isSafeRefName, isValidTarget } from './validation.ts';
 import { UNCOMMITTED, type ChangeTarget } from '../types.ts';
 
 /**
@@ -29,6 +29,16 @@ function followsRenames(options: LoadOptions): boolean {
 	} catch {
 		return true;
 	}
+}
+
+/**
+ * A changed file as the webview sent it back. Its paths are joined onto the
+ * repository to open the working-tree side, so they must stay inside it.
+ */
+function isValidChange(change: unknown): boolean {
+	if (typeof change !== 'object' || change === null) return false;
+	const { path, oldPath } = change as { path?: unknown; oldPath?: unknown };
+	return isRepoRelativePath(path) && (oldPath === null || isRepoRelativePath(oldPath));
 }
 
 /** Quiet period after the last file change before the graph reloads. */
@@ -295,6 +305,7 @@ export class GraphController implements vscode.Disposable {
 				break;
 			}
 			case 'openDiff':
+				if (!isValidChange(message.change)) return;
 				await openChangeDiff(message.target, message.change);
 				await this.services.reviews.markOpened(message.target, message.change.path);
 				break;
@@ -304,7 +315,7 @@ export class GraphController implements vscode.Disposable {
 				break;
 			}
 			case 'openRevisionFile':
-				if (!known.includes(message.repo) || !HASH.test(message.hash)) return;
+				if (!known.includes(message.repo) || !HASH.test(message.hash) || !isRepoRelativePath(message.path)) return;
 				if (message.compare) await compareWithWorkingFile(message.repo, message.hash, message.path);
 				else await openFileAtRevision(message.repo, message.hash, message.path);
 				break;
@@ -325,6 +336,7 @@ export class GraphController implements vscode.Disposable {
 				break;
 			}
 			case 'openFile':
+				if (!known.includes(message.repo) || !isRepoRelativePath(message.path)) return;
 				await openWorkingFile(message.repo, message.path);
 				break;
 		}

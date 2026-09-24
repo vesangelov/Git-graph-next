@@ -1,5 +1,5 @@
 import type { GitExecutor } from './executor.ts';
-import { FileChangeType, STAGED, UNCOMMITTED, type ChangeTarget, type FileChange, type Hash } from '../types.ts';
+import { FileChangeType, STAGED, UNCOMMITTED, isFullHash, type ChangeTarget, type FileChange, type Hash } from '../types.ts';
 
 /**
  * Flags every diff invocation needs. `--no-color` matters: with
@@ -151,11 +151,13 @@ function sortChanges(changes: FileChange[]): FileChange[] {
  * does not exist there. Bytes rather than text, so binary files and notebooks
  * reach VS Code untouched and it can pick the right editor for them.
  *
- * `revision` is a commit hash, or `STAGED` for the file as it is in the index
- * (`:path` to git) — the side the Staged and Working Tree rows compare
- * against when they are shown apart (#575).
+ * `revision` is a full commit hash, or `STAGED` for the file as it is in the
+ * index (`:path` to git) — the side the Staged and Working Tree rows compare
+ * against when they are shown apart (#575). Anything else is refused rather
+ * than handed to git, where a value starting with `-` would be an option.
  */
 export async function readBlobAtRevision(git: GitExecutor, repo: string, revision: Hash, path: string): Promise<Buffer | null> {
+	if (revision !== STAGED && !isFullHash(revision)) return null;
 	const object = revision === STAGED ? `:${path}` : `${revision}:${path}`;
 	try {
 		return await git.runBinary(repo, ['show', '--no-textconv', object]);

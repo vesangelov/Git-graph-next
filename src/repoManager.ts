@@ -46,25 +46,45 @@ export class RepoManager implements vscode.Disposable {
 	private list: RepositoryInfo[] = [];
 	private rescanTimer: ReturnType<typeof setTimeout> | undefined;
 	private scanGeneration = 0;
+	/** Settles once the first discovery has finished, successfully or not. */
+	private readonly initialised: Promise<void>;
+	private markInitialised: () => void = () => undefined;
 
 	constructor(
 		private readonly git: GitExecutor,
 		private readonly state: vscode.Memento
-	) {}
+	) {
+		this.initialised = new Promise((resolve) => (this.markInitialised = resolve));
+	}
 
 	get repositories(): readonly RepositoryInfo[] {
 		return this.list;
 	}
 
 	async initialise(): Promise<void> {
-		await this.connectGitExtension();
-		this.disposables.push(
-			vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleRescan()),
-			vscode.workspace.onDidChangeConfiguration((event) => {
-				if (event.affectsConfiguration('git-graph-next.maxDepthOfRepoSearch')) this.scheduleRescan();
-			})
-		);
-		await this.rescan();
+		try {
+			await this.connectGitExtension();
+			this.disposables.push(
+				vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleRescan()),
+				vscode.workspace.onDidChangeConfiguration((event) => {
+					if (event.affectsConfiguration('git-graph-next.maxDepthOfRepoSearch')) this.scheduleRescan();
+				})
+			);
+			await this.rescan();
+		} finally {
+			this.markInitialised();
+		}
+	}
+
+	/**
+	 * Whether `path` is one of the repositories. Waits for the first discovery,
+	 * so a diff tab VS Code restores at startup is not refused merely because
+	 * the list did not exist yet.
+	 */
+	async isKnown(path: string): Promise<boolean> {
+		await this.initialised;
+		const key = normaliseRepoPath(path);
+		return this.list.some((repo) => normaliseRepoPath(repo.path) === key);
 	}
 
 	/**

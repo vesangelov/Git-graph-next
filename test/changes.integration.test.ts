@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { after, before, test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GitExecutor } from '../src/git/executor.ts';
@@ -114,7 +114,7 @@ test('the empty side of a notebook diff is still a valid notebook', () => {
 	assert.equal(notebook.nbformat, 4);
 });
 
-test('reads the index side of a staged file', async () => {
+test('reads the index side of a staged file, and refuses revisions that are not one', async () => {
 	// With staged and unstaged changes as separate rows (#575), one side of
 	// their diffs is the index. It used to be asked for as `++++…:path`, which
 	// git rejects, so that side always came up empty.
@@ -124,6 +124,13 @@ test('reads the index side of a staged file', async () => {
 	try {
 		assert.equal((await readBlobAtRevision(git, repo, STAGED, 'keep.txt'))?.toString('utf8'), 'staged\n');
 		assert.match((await readBlobAtRevision(git, repo, hashes.second, 'keep.txt'))?.toString('utf8') ?? '', /line 2 changed/);
+
+		// Only full hashes and the index reach git: `--output=…` would be an
+		// option to `git show`, and a ref name is never what the view sends.
+		for (const revision of [`--output=${join(repo, 'written')}`, 'HEAD', hashes.second.slice(0, 12), '', UNCOMMITTED]) {
+			assert.equal(await readBlobAtRevision(git, repo, revision, 'keep.txt'), null, JSON.stringify(revision));
+		}
+		assert.deepEqual(readdirSync(repo).filter((name) => name.startsWith('written')), []);
 	} finally {
 		fixture('reset', '-q', '--hard');
 	}

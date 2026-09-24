@@ -186,7 +186,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			vscode.window.setStatusBarMessage('Copied path to the clipboard', 3000);
 		}),
 
-		vscode.workspace.registerFileSystemProvider(REVISION_SCHEME, new RevisionFileSystem(git), { isReadonly: true, isCaseSensitive: true }),
+		vscode.workspace.registerFileSystemProvider(REVISION_SCHEME, new RevisionFileSystem(git, (path) => repos.isKnown(path)), { isReadonly: true, isCaseSensitive: true }),
 		vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebar, { webviewOptions: { retainContextWhenHidden: retainContextWhenHidden() } }),
 
 		vscode.commands.registerCommand('gitGraphNext.addGitRepository', async () => {
