@@ -328,3 +328,37 @@ test('shows staged and unstaged changes as separate rows, each with its own file
 	assert.deepEqual(workingFiles.map((c) => [c.type, c.path]), [['M', 'a.txt'], ['U', 'new.txt']]);
 	assert.deepEqual((await readChanges(git, { repo, hash: UNCOMMITTED, base: head })).map((c) => c.path), ['a.txt', 'new.txt', 'staged.txt'], 'together, everything not committed');
 });
+
+test('draws a SHA-256 repository, whose object ids are 64 digits', async (t) => {
+	// Git 3.0 plans to make these the default. Every check that assumed
+	// 40 digits silently dropped every commit, leaving an empty graph.
+	if (!git.atLeast(2, 29)) return t.skip('--object-format needs git 2.29');
+	const repo = join(root, 'sha256');
+	mkdirSync(repo, { recursive: true });
+	fixture(repo, 'init', '-q', '--object-format=sha256', '-b', 'main');
+	for (const [key, value] of [['user.email', 'test@example.com'], ['user.name', 'Test'], ['commit.gpgsign', 'false'], ['core.autocrlf', 'false']]) fixture(repo, 'config', key, value);
+	commitFile(repo, 'a.txt', 'one\n', 'first');
+	commitFile(repo, 'a.txt', 'two\n', 'second');
+	fixture(repo, 'branch', 'side', 'HEAD~1');
+	fixture(repo, 'tag', 'v1', 'HEAD~1');
+	fixture(repo, 'notes', 'add', '-m', 'a note', 'HEAD');
+	writeFileSync(join(repo, 'a.txt'), 'three\n');
+	fixture(repo, 'stash', 'push', '-q', '-m', 'stashed');
+	writeFileSync(join(repo, 'a.txt'), 'four\n');
+
+	const head = fixture(repo, 'rev-parse', 'HEAD').trim();
+	assert.equal(head.length, 64);
+
+	const data = await loadGraphData(git, repo, { ...request, showNotes: true });
+	const subjects = data.commits.map((c) => c.subject);
+	assert.deepEqual(subjects.filter((s) => s === 'first' || s === 'second'), ['second', 'first'], 'both commits are drawn');
+	assert.equal(data.repo.headHash, head);
+	assert.equal(data.commits[0].hash, UNCOMMITTED, 'the working tree change is a row');
+	assert.ok(data.commits.some((c) => c.stash !== null), 'the stash is a row');
+	assert.deepEqual(data.notedCommits, [head]);
+	assert.ok(data.heads.some((h) => h.name === 'side'));
+	assert.ok(data.tags.some((tag) => tag.name === 'v1'));
+
+	const changes = await readChanges(git, { repo, hash: head, base: fixture(repo, 'rev-parse', 'HEAD~1').trim() });
+	assert.deepEqual(changes.map((c) => c.path), ['a.txt']);
+});

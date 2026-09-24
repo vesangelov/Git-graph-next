@@ -1,5 +1,5 @@
 import type { GitExecutor } from './executor.ts';
-import { PendingOperation, RefType, type Hash, type HeadRef, type Ref, type RemoteHeadRef, type RepoState, type Stash, type TagRef } from '../types.ts';
+import { PendingOperation, RefType, isFullHash, type Hash, type HeadRef, type Ref, type RemoteHeadRef, type RepoState, type Stash, type TagRef } from '../types.ts';
 
 /**
  * Ref fields, NUL-separated.
@@ -196,7 +196,7 @@ export class GitRefReader {
 		const hash = headHash?.trim() ?? '';
 		return {
 			head: head === '' ? null : head,
-			headHash: /^[0-9a-f]{40}$/.test(hash) ? hash : null,
+			headHash: isFullHash(hash) ? hash : null,
 			isDetached: head === '',
 			pendingOperation: pending
 		};

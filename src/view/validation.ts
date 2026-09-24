@@ -4,14 +4,15 @@
  * send well-formed values; anything that reaches git's argument list is
  * checked here first. No vscode import, so it is testable in plain Node.
  */
-import { STAGED, UNCOMMITTED, type ChangeTarget } from '../types.ts';
+import { FULL_HASH, STAGED, UNCOMMITTED, type ChangeTarget } from '../types.ts';
 
-export const HASH = /^[0-9a-f]{40}$/;
+/** A full commit hash, SHA-1 or SHA-256. */
+export const HASH = FULL_HASH;
 
 /**
  * The webview sends commit hashes that end up in git's argument list; it is
  * not trusted to have sent well-formed ones. A target names a known
- * repository, a 40-hex commit (or the working tree), and a 40-hex base.
+ * repository, a full commit hash (or the working tree), and a full hash as base.
  */
 export function isValidTarget(target: unknown, knownRepos: readonly string[]): target is ChangeTarget {
 	if (typeof target !== 'object' || target === null) return false;
@@ -27,3 +28,4 @@ export function isValidTarget(target: unknown, knownRepos: readonly string[]): t
 export function isSafeRefName(value: unknown): value is string {
 	return typeof value === 'string' && value !== '' && !value.startsWith('-') && !/[\0-\x1f\x7f]/.test(value);
 }
+

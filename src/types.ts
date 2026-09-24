@@ -4,8 +4,20 @@
  * no Date, no Map, no class instances.
  */
 
-/** A 40-character lowercase hex object id. */
+/**
+ * A full lowercase hex object id: 40 digits in a SHA-1 repository, 64 in a
+ * SHA-256 one (`git init --object-format=sha256`, which Git 3.0 plans to make
+ * the default for new repositories).
+ */
 export type Hash = string;
+
+/** Matches a full object id of either hash format, and nothing else. */
+export const FULL_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** True for a full object id of either hash format. */
+export function isFullHash(value: unknown): value is Hash {
+	return typeof value === 'string' && FULL_HASH.test(value);
+}
 
 /** The synthetic hash used for the Uncommitted Changes row. */
 export const UNCOMMITTED: Hash = '*'.repeat(40);

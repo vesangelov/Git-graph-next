@@ -1,5 +1,5 @@
 import type { GitExecutor } from './executor.ts';
-import { PendingOperation, type GitAction } from '../types.ts';
+import { PendingOperation, isFullHash, type GitAction } from '../types.ts';
 
 /** One git invocation of an action. */
 export interface GitCommand {
@@ -28,7 +28,6 @@ export class InvalidActionError extends Error {
 	}
 }
 
-const HASH = /^[0-9a-f]{40}$/;
 const STASH = /^stash@\{\d+\}$/;
 
 /**
@@ -47,7 +46,7 @@ export function validateAction(action: GitAction): void {
 		}
 	};
 	const hash = (value: unknown) => {
-		if (typeof value !== 'string' || !HASH.test(value)) throw new InvalidActionError(`Invalid commit hash: ${JSON.stringify(value)}`);
+		if (!isFullHash(value)) throw new InvalidActionError(`Invalid commit hash: ${JSON.stringify(value)}`);
 	};
 	const optionalRemote = (value: unknown) => {
 		if (value !== null) ref(value, 'remote');
@@ -476,7 +475,7 @@ export function describeAction(action: GitAction): string {
  */
 export function rewriteTodo(todo: string, commits: readonly string[], operation: 'squash' | 'fixup' | 'drop'): string {
 	const lines = todo.split('\n');
-	const pick = /^(?:pick|p)\s+([0-9a-f]{4,40})\b/;
+	const pick = /^(?:pick|p)\s+([0-9a-f]{4,64})\b/;
 	const indexOf = (commit: string) =>
 		lines.findIndex((line) => {
 			const match = pick.exec(line);

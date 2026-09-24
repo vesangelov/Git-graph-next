@@ -65,6 +65,12 @@ test('rejects values that git would read as options, and malformed hashes', () =
 	assert.throws(() => validateAction({ kind: 'stashDrop', selector: 'stash@{0} --all' }), InvalidActionError);
 	assert.throws(() => validateAction({ kind: 'fetch', remote: 'origin\nrm', prune: false, pruneTags: false, noTags: false }), InvalidActionError);
 	assert.throws(() => validateAction({ kind: 'nope' } as unknown as GitAction), InvalidActionError);
+
+	// Full ids of both hash formats pass; anything in between does not.
+	assert.doesNotThrow(() => validateAction({ kind: 'checkoutDetached', hash: 'a'.repeat(40) }));
+	assert.doesNotThrow(() => validateAction({ kind: 'checkoutDetached', hash: 'a'.repeat(64) }));
+	assert.throws(() => validateAction({ kind: 'checkoutDetached', hash: 'a'.repeat(52) }), InvalidActionError);
+	assert.throws(() => validateAction({ kind: 'checkoutDetached', hash: 'A'.repeat(64) }), InvalidActionError);
 });
 
 test('checks new names with git, before anything runs', async () => {

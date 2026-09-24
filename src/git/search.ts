@@ -3,7 +3,7 @@ import { buildHashListArgs, buildLogArgs, parseLog, type LogRequest } from './lo
 import { GitRefReader, type RefsResult } from './refs.ts';
 import { toLogRequest, type GraphDataRequest } from './graphData.ts';
 import { matchesQuery, type SearchQuery, type SearchRef } from '../search/query.ts';
-import type { Commit, Hash } from '../types.ts';
+import { isFullHash, type Commit, type Hash } from '../types.ts';
 
 /** How deep into history a search looks. Past this, a match is reported as not found. */
 const ORDER_LIMIT = 200_000;
@@ -110,7 +110,7 @@ async function findCandidates(
 		}
 		for (const prefix of query.hash) {
 			const resolved = (await git.runOrNull(repo, ['rev-parse', '--verify', '--quiet', `${prefix}^{commit}`]))?.trim();
-			if (resolved !== undefined && /^[0-9a-f]{40}$/.test(resolved)) pinned.add(resolved);
+			if (isFullHash(resolved)) pinned.add(resolved);
 		}
 		return readCommits(git, repo, [...pinned]);
 	}
@@ -128,14 +128,14 @@ async function findCandidates(
 		readCommits(git, repo, [...pinned])
 	]);
 	// A hex word may be a hash prefix; those are only found by asking.
-	const hexWord = query.text.length === 1 && /^[0-9a-f]{4,40}$/.test(query.text[0]) ? query.text[0] : null;
+	const hexWord = query.text.length === 1 && /^[0-9a-f]{4,64}$/.test(query.text[0]) ? query.text[0] : null;
 	const byHash = hexWord === null ? [] : await readCommits(git, repo, [(await git.runOrNull(repo, ['rev-parse', '--verify', '--quiet', `${hexWord}^{commit}`]))?.trim() ?? '']);
 	return [...inMessage, ...byAuthor, ...inRefs, ...byHash];
 }
 
 /** Reads specific commits, in no particular order. Unknown hashes are skipped. */
 async function readCommits(git: GitExecutor, repo: string, hashes: readonly string[]): Promise<Commit[]> {
-	const valid = hashes.filter((hash) => /^[0-9a-f]{40}$/.test(hash));
+	const valid = hashes.filter(isFullHash);
 	if (valid.length === 0) return [];
 	const args = buildLogArgs(
 		{

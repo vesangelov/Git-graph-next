@@ -4,7 +4,7 @@ import { GitLogReader, needsParentRewriting, refGlobArgs, type LogRequest } from
 import { GitRefReader, type RefsResult } from './refs.ts';
 import { rewriteParents } from '../graph/rewrite.ts';
 import { commitWebUrl, parseRemoteUrl, resolveIssueLinks, type IssueLinkSetting, type RemoteInfo } from './remote.ts';
-import { STAGED, UNCOMMITTED, type Commit, type GraphData, type Hash, type LogFilter, type Stash } from '../types.ts';
+import { STAGED, UNCOMMITTED, isFullHash, type Commit, type GraphData, type Hash, type LogFilter, type Stash } from '../types.ts';
 
 export interface GraphDataRequest {
 	readonly filter: LogFilter;
@@ -277,7 +277,7 @@ export async function listNotedCommits(git: GitExecutor, repo: string): Promise<
 	const noted = new Set<Hash>();
 	for (const line of (output ?? '').split('\n')) {
 		const commit = line.trim().split(' ')[1];
-		if (commit !== undefined && /^[0-9a-f]{40}$/.test(commit)) noted.add(commit);
+		if (isFullHash(commit)) noted.add(commit);
 	}
 	return noted;
 }

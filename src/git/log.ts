@@ -1,5 +1,5 @@
 import type { GitExecutor } from './executor.ts';
-import type { Commit, Hash, LogFilter } from '../types.ts';
+import { isFullHash, type Commit, type Hash, type LogFilter } from '../types.ts';
 
 /**
  * Fields requested from `git log`, in order. They are separated by NUL, which
@@ -212,7 +212,7 @@ export function parseLog(stdout: string): Commit[] {
 	for (let record = 0; record < usableRecords; record++) {
 		const base = record * FIELDS_PER_COMMIT;
 		const hash = fields[base].replace(/^\n/, '');
-		if (!/^[0-9a-f]{40}$/.test(hash)) continue;
+		if (!isFullHash(hash)) continue;
 
 		const parentField = fields[base + 1];
 		commits.push({
@@ -264,6 +264,6 @@ export class GitLogReader {
 	async resolve(revision: string): Promise<Hash | null> {
 		const output = await this.git.runOrNull(this.repoPath, ['rev-parse', '--verify', '--quiet', `${revision}^{commit}`]);
 		const hash = output?.trim() ?? '';
-		return /^[0-9a-f]{40}$/.test(hash) ? hash : null;
+		return isFullHash(hash) ? hash : null;
 	}
 }
