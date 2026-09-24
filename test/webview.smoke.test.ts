@@ -256,3 +256,57 @@ test('starts a code review and shows its progress and navigation', async () => {
 	send({ type: 'reviewState', review: null });
 	assert.ok([...doc().querySelectorAll('.details-button')].some((b) => b.textContent === 'Review'), 'back to the Review button');
 });
+
+test('can be used with the keyboard and a screen reader alone', async () => {
+	const table = doc().querySelector('.table') as HTMLElement;
+	const menu = doc().querySelector('.context-menu') as HTMLElement;
+	const press = (target: EventTarget, key: string, init: KeyboardEventInit = {}) =>
+		target.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
+
+	// A list of options, each named the way it should be read out.
+	assert.equal(table.getAttribute('role'), 'listbox');
+	const head = rowFor(1);
+	assert.equal(head.getAttribute('role'), 'option');
+	const name = head.getAttribute('aria-label')!;
+	assert.ok(name.startsWith('commit 1 fixes #1. branch main, checked out'), name);
+	assert.ok(name.endsWith('. HEAD'), name);
+	assert.equal(doc().querySelector('.row.header')!.getAttribute('aria-hidden'), 'true');
+
+	// Home, arrows and Shift+arrows move and extend the selection.
+	table.focus();
+	press(table, 'Home');
+	assert.equal(table.getAttribute('aria-activedescendant'), 'commit-row-0');
+	assert.equal(doc().getElementById('commit-row-0')!.getAttribute('aria-selected'), 'true');
+	press(table, 'ArrowDown');
+	press(table, 'ArrowDown');
+	// A keyboard selection loads its files after a short pause.
+	await flush();
+	assert.equal(lastPosted('selectCommit')!.target.hash, h(1));
+	press(table, 'ArrowDown', { shiftKey: true });
+	await flush();
+	assert.deepEqual(lastPosted('selectCommit')!.target, { repo: '/repo', hash: h(1), base: h(2) }, 'two rows selected are compared');
+	assert.equal(table.getAttribute('aria-activedescendant'), 'commit-row-3', 'the moving end is announced');
+	press(table, 'ArrowUp');
+	await flush();
+	assert.equal(lastPosted('selectCommit')!.target.hash, h(1));
+
+	// The menu key: the row's actions, and each label's one entry away.
+	table.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+	assert.equal(menu.hidden, false);
+	assert.equal(doc().activeElement, menu, 'focus moves into the menu');
+	const first = menu.querySelector('.item.active');
+	assert.equal(first?.textContent, 'Branch main ›', 'the first entry is ready for Enter');
+	assert.equal(menu.getAttribute('aria-activedescendant'), first?.id);
+	press(doc(), 'Enter');
+	menuItem('Show Only This Branch');
+
+	// Escape closes it, and focus is back where it was.
+	press(doc(), 'Escape');
+	assert.equal(menu.hidden, true);
+	assert.equal(doc().activeElement, table);
+
+	// Shift+F10 opens it as well.
+	press(table, 'F10', { shiftKey: true });
+	assert.equal(menu.hidden, false);
+	press(doc(), 'Escape');
+});

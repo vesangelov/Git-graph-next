@@ -7,6 +7,9 @@ import { DEFAULT_GEOMETRY, graphPixelWidth, renderGraph, type GraphGeometry } fr
 /** Labels drawn on one row before the rest fold into a "+N" chip (#777). */
 const MAX_LABELS = 4;
 
+/** How each kind of label is read out, in a row's accessible name. */
+const LABEL_KIND_NAMES: Readonly<Record<LabelKind, string>> = { head: 'branch', remote: 'remote branch', tag: 'tag', stash: 'stash', note: 'note' };
+
 /** Rows rendered above and below the viewport, so fast scrolling shows no gaps. */
 const OVERSCAN = 15;
 /** Minimum width of the graph column, so the header text always fits. */
@@ -109,6 +112,12 @@ export interface TableCallbacks {
 	onSelect(commit: Commit, toggle: boolean): void;
 	/** `selection` is every selected commit, in row order, when the row is part of a multi-selection. */
 	onContextMenu(event: MouseEvent, commit: Commit, label: RefLabel | null, selection: readonly Commit[]): void;
+	/**
+	 * The menu key or Shift+F10 on the table: the context menu of the selected
+	 * row, at `at`. A keyboard cannot point at one label, so `labels` are all
+	 * of the row's, for the menu to offer each one's actions.
+	 */
+	onKeyboardMenu(at: { readonly x: number; readonly y: number }, commit: Commit, labels: readonly RefLabel[], selection: readonly Commit[]): void;
 	/** Two or more commits are selected, in row order (newest first). */
 	onSelectMany(commits: readonly Commit[]): void;
 	onNearEnd(): void;
@@ -155,6 +164,11 @@ export class CommitTable {
 	 * single selection.
 	 */
 	private multi = new Set<Hash>();
+	/**
+	 * The moving end of a keyboard range selection (Shift+arrows), whose other
+	 * end is `selected`. Null when the keyboard is not extending a range.
+	 */
+	private cursor: number | null = null;
 	/** Avatars by lower-case e-mail, when enabled; null = the author has none. */
 	private readonly avatars = new Map<string, string | null>();
 	/** Rows whose "+N" chip was clicked, showing every label (#777). */
@@ -176,16 +190,25 @@ export class CommitTable {
 	) {
 		this.element = el('div', compact ? 'table compact' : 'table');
 		this.element.tabIndex = 0;
+		// A list of commits to a screen reader: each row is an option named by
+		// its message, refs, author, date and hash, and the selected one is
+		// announced as the active descendant while focus stays on the table.
+		this.element.setAttribute('role', 'listbox');
+		this.element.setAttribute('aria-label', 'Commits');
+		this.element.setAttribute('aria-multiselectable', 'true');
 
 		this.header = el('div', 'row header');
 		for (const [cls, text] of [['graph', 'Graph'], ['desc', 'Description'], ['date', 'Date'], ['author', 'Author'], ['hash', 'Commit']]) {
 			this.header.appendChild(el('div', `cell ${cls}`, text));
 		}
+		// Column titles are for the eye; each row's name already says what is what.
+		this.header.setAttribute('aria-hidden', 'true');
 
 		this.body = el('div', 'body');
 		this.rowsLayer = el('div', 'rows');
 		this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
 		this.svg.classList.add('graph-svg');
+		this.svg.setAttribute('aria-hidden', 'true');
 		this.body.append(this.rowsLayer, this.svg);
 		this.footer = el('div', 'footer');
 
@@ -206,6 +229,13 @@ export class CommitTable {
 			if (hit?.label != null) this.callbacks.onLabelDoubleClick(hit.commit, hit.label);
 		});
 		this.element.addEventListener('keydown', (event) => this.onKey(event));
+		// The menu key opens a context menu on whatever has focus — the table
+		// itself, never a row — so it is answered here, for the selected row.
+		this.element.addEventListener('contextmenu', (event) => {
+			if (event.target !== this.element) return;
+			event.preventDefault();
+			this.openKeyboardMenu();
+		});
 	}
 
 	get scrollTop(): number {
@@ -345,6 +375,7 @@ export class CommitTable {
 		});
 
 		if (this.highlightedLane !== null) this.applyLaneHighlight();
+		this.updateActiveDescendant();
 		if (range.last >= rowCount - LOAD_MORE_THRESHOLD) this.callbacks.onNearEnd();
 		if (model.config.avatars) {
 			const missing = new Set<string>();
@@ -377,6 +408,7 @@ export class CommitTable {
 		author.title = authors.join('\n');
 		element.append(author, el('div', 'cell hash', `${shortHash(run[run.length - 1].hash).slice(0, 7)}…`));
 		element.title = `${run.length} commits of linear history, from ${shortHash(run[run.length - 1].hash)} to ${shortHash(run[0].hash)}. Click to expand.`;
+		this.asOption(element, model, row, `${run.length} commits folded, ${date.textContent}, ${author.textContent}. Press Enter to expand.`);
 		return element;
 	}
 
@@ -467,7 +499,24 @@ export class CommitTable {
 		if (!isUncommittedRow(commit.hash)) hash.title = commit.hash;
 		element.appendChild(hash);
 
+		const refs = all.map((label) => `${LABEL_KIND_NAMES[label.kind]} ${label.name}${label.current ? ', checked out' : ''}`);
+		const name = [commit.subject, refs.join('; '), commit.stash?.selector ?? authorText, date.textContent ?? '', hash.textContent ?? '']
+			.filter((part) => part !== '')
+			.join('. ');
+		this.asOption(element, model, row, commit.hash === model.data.repo.headHash ? `${name}. HEAD` : name);
 		return element;
+	}
+
+	/** Makes a row an option of the listbox, named the way a screen reader should read it. */
+	private asOption(element: HTMLElement, model: TableModel, row: number, name: string): void {
+		const hash = model.data.commits[row].hash;
+		element.id = `commit-row-${row}`;
+		element.setAttribute('role', 'option');
+		// Only the rows on screen exist, so their place in the whole list is told.
+		element.setAttribute('aria-setsize', String(model.data.commits.length));
+		element.setAttribute('aria-posinset', String(row + 1));
+		element.setAttribute('aria-selected', String(hash === this.selected || this.multi.has(hash)));
+		element.setAttribute('aria-label', name);
 	}
 
 	private rowFromEvent(event: Event): { row: number; commit: Commit; label: RefLabel | null } | null {
@@ -577,13 +626,30 @@ export class CommitTable {
 		if (this.model === null) return;
 		for (const row of this.rowsLayer.children) {
 			const hash = this.model.data.commits[Number((row as HTMLElement).dataset.row)]?.hash;
-			row.classList.toggle('selected', hash !== undefined && (hash === this.selected || this.multi.has(hash)));
+			const selected = hash !== undefined && (hash === this.selected || this.multi.has(hash));
+			row.classList.toggle('selected', selected);
+			row.setAttribute('aria-selected', String(selected));
 		}
+		this.updateActiveDescendant();
+	}
+
+	/** Points the table's active descendant at the row the keyboard is on, when it is drawn. */
+	private updateActiveDescendant(): void {
+		const index = this.cursor ?? this.selectedIndex();
+		const row = index === -1 ? null : this.rowsLayer.querySelector<HTMLElement>(`#commit-row-${index}`);
+		if (row != null) this.element.setAttribute('aria-activedescendant', row.id);
+		else this.element.removeAttribute('aria-activedescendant');
+	}
+
+	private selectedIndex(): number {
+		if (this.model === null || this.selected === null) return -1;
+		return this.model.data.commits.findIndex((c) => c.hash === this.selected);
 	}
 
 	/** Highlights a row as the selection without reporting it. */
 	private mark(hash: Hash): void {
 		this.selected = hash;
+		this.cursor = null;
 		this.multi.clear();
 		this.refreshSelection();
 	}
@@ -591,21 +657,90 @@ export class CommitTable {
 	private select(hash: Hash, toggle = false): void {
 		if (this.model === null) return;
 		this.selected = hash;
+		this.cursor = null;
 		this.multi.clear();
 		this.refreshSelection();
 		const commit = this.model.data.commits.find((c) => c.hash === hash);
 		if (commit !== undefined) this.callbacks.onSelect(commit, toggle);
 	}
 
+	/**
+	 * Arrows, Page Up/Down, Home and End move the selection; with Shift they
+	 * extend it into a range, as Shift+click does. Enter expands a folded run.
+	 * Shift+F10 opens the context menu (the menu key arrives as `contextmenu`).
+	 */
 	private onKey(event: KeyboardEvent): void {
-		if (this.model === null || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return;
-		const commits = this.model.data.commits;
-		const current = commits.findIndex((c) => c.hash === this.selected);
-		const next = current === -1 ? 0 : Math.max(0, Math.min(commits.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)));
+		const model = this.model;
+		if (model === null) return;
+		if (event.key === 'F10' && event.shiftKey) {
+			event.preventDefault();
+			this.openKeyboardMenu();
+			return;
+		}
+		const commits = model.data.commits;
+		const current = this.cursor ?? this.selectedIndex();
+		const page = Math.max(1, Math.floor(this.element.clientHeight / this.geometry.rowHeight) - 2);
+		let next: number;
+		switch (event.key) {
+			case 'ArrowDown':
+				next = current === -1 ? 0 : current + 1;
+				break;
+			case 'ArrowUp':
+				next = current === -1 ? 0 : current - 1;
+				break;
+			case 'PageDown':
+				next = current === -1 ? 0 : current + page;
+				break;
+			case 'PageUp':
+				next = current === -1 ? 0 : current - page;
+				break;
+			case 'Home':
+				next = 0;
+				break;
+			case 'End':
+				next = commits.length - 1;
+				break;
+			case 'Enter': {
+				const commit = commits[current];
+				if (commit !== undefined && model.collapsed.has(commit.hash)) {
+					event.preventDefault();
+					this.callbacks.onExpand(commit.hash);
+				}
+				return;
+			}
+			default:
+				return;
+		}
+		next = Math.max(0, Math.min(commits.length - 1, next));
 		if (commits[next] === undefined) return;
 		event.preventDefault();
-		this.select(commits[next].hash);
+		if (event.shiftKey && this.selected !== null) {
+			this.extendSelection(next, true);
+			this.cursor = next;
+			this.updateActiveDescendant();
+		} else {
+			this.select(commits[next].hash);
+		}
 		this.scrollRowIntoView(next);
+	}
+
+	/** The context menu of the selected row, placed under it, for the keyboard. */
+	private openKeyboardMenu(): void {
+		const model = this.model;
+		if (model === null || model.data.commits.length === 0) return;
+		let index = this.cursor ?? this.selectedIndex();
+		if (index === -1) {
+			index = 0;
+			this.select(model.data.commits[0].hash);
+		}
+		// Draw now, so the row exists to place the menu against.
+		this.scrollRowIntoView(index);
+		this.drawn = null;
+		this.draw();
+		const rect = (this.rowsLayer.querySelector<HTMLElement>(`#commit-row-${index}`) ?? this.element).getBoundingClientRect();
+		const commit = model.data.commits[index];
+		const selection = this.multi.has(commit.hash) ? this.selectedCommits() : [commit];
+		this.callbacks.onKeyboardMenu({ x: rect.left + 16, y: rect.bottom }, commit, model.labels.get(commit.hash) ?? [], selection);
 	}
 
 	/** Scrolls the least distance that shows a row fully, below the sticky header. */

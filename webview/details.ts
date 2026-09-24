@@ -342,6 +342,10 @@ export class DetailsPane {
 		const row = el('div', 'file');
 		row.tabIndex = 0;
 		row.title = `${change.path}${change.oldPath !== null ? `\nRenamed from ${change.oldPath}` : ''}\n${STATUS_NAMES[change.type]} — click to open the diff`;
+		// Read out as one sentence; Enter opens the diff, the menu key its actions.
+		row.setAttribute('role', 'button');
+		const counts = change.additions !== null && change.deletions !== null ? `, ${change.additions} added, ${change.deletions} removed` : '';
+		row.setAttribute('aria-label', `${STATUS_NAMES[change.type]} ${change.path}${change.oldPath !== null ? `, renamed from ${change.oldPath}` : ''}${counts}`);
 
 		row.appendChild(el('span', `status status-${change.type}`, change.type));
 		const slash = change.path.lastIndexOf('/');

@@ -180,6 +180,12 @@ input:focus-visible {
 	color: var(--vscode-list-activeSelectionForeground, inherit);
 }
 
+/* Reached with Tab rather than a click: show where the keyboard is. */
+.table:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
 .row.commit.head .subject {
 	font-weight: 600;
 }
@@ -334,6 +340,8 @@ input:focus-visible {
 	border-radius: 5px;
 	box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
 	user-select: none;
+	/* The menu holds focus while open; the highlighted item shows where. */
+	outline: none;
 }
 
 .context-menu .item {

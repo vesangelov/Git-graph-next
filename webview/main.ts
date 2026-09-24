@@ -22,7 +22,10 @@ import {
 } from './actionMenus.ts';
 import { shortHash } from './format.ts';
 import { ContextMenu, type MenuItem } from './menu.ts';
-import { CommitTable, buildLabels, el, type RefLabel } from './render/table.ts';
+import { CommitTable, buildLabels, el, type LabelKind, type RefLabel } from './render/table.ts';
+
+/** How a label is introduced in the keyboard context menu, where its actions are one entry away. */
+const LABEL_MENU_NAMES: Readonly<Record<LabelKind, string>> = { head: 'Branch', remote: 'Remote Branch', tag: 'Tag', stash: 'Stash', note: 'Note' };
 
 interface VsCodeApi {
 	postMessage(message: WebviewMessage): void;
@@ -222,6 +225,18 @@ const table = new CommitTable({
 	onSelect: (commit, toggle) => selectCommit(commit, toggle),
 	onContextMenu: (event, commit, label, selection) =>
 		menu.open(event.clientX, event.clientY, selection.length > 1 ? selectionMenuItems(selection) : menuItems(commit, label)),
+	onKeyboardMenu: (at, commit, labels, selection) => {
+		if (selection.length > 1) {
+			menu.open(at.x, at.y, selectionMenuItems(selection), true);
+			return;
+		}
+		// A keyboard cannot point at a label, so each label's actions — what a
+		// right-click on it would show — are one entry away.
+		const perLabel: MenuItem[] = labels
+			.filter((label) => label.kind !== 'note')
+			.map((label) => ({ label: `${LABEL_MENU_NAMES[label.kind]} ${label.name} ›`, action: () => menu.open(at.x, at.y, menuItems(commit, label), true) }));
+		menu.open(at.x, at.y, [...perLabel, ...(perLabel.length > 0 ? [{ separator: true } as const] : []), ...menuItems(commit, null)], true);
+	},
 	onSelectMany: (commits) => selectMany(commits),
 	onNearEnd: () => {
 		if (state.config?.loadMoreCommitsAutomatically === true) loadMore();
@@ -249,7 +264,15 @@ const table = new CommitTable({
 
 const details = new DetailsPane({
 	onOpenDiff: (target, change) => post({ type: 'openDiff', target, change }),
-	onFileContextMenu: (event, target, change) => menu.open(event.clientX, event.clientY, fileMenuItems(target, change)),
+	onFileContextMenu: (event, target, change) => {
+		// The menu key sends `contextmenu` with no button involved (a right
+		// click is button 2; Ctrl+click on a Mac holds button 1 down): place the
+		// menu at the file, ready for the arrow keys.
+		const keyboard = event.button !== 2 && event.buttons === 0;
+		const file = (event.target as HTMLElement | null)?.closest<HTMLElement>('.file');
+		const at = keyboard && file != null ? { x: file.getBoundingClientRect().left + 16, y: file.getBoundingClientRect().bottom } : { x: event.clientX, y: event.clientY };
+		menu.open(at.x, at.y, fileMenuItems(target, change), keyboard);
+	},
 	onRevealCommit: (hash) => revealCommit(hash),
 	onClose: () => details.close(),
 	onResize: (height) => {
