@@ -46,14 +46,20 @@ the extension loaded.
 
 ```sh
 npm run typecheck  # tsc --noEmit, strict
-npm test           # 140+ tests, most against real repositories
+npm test           # 150+ tests, most against real repositories
 npm run package    # production bundle
 npm run vsce:package
 ```
 
 `npm test` creates temporary repositories and runs the real `git` binary against
 them, so the tests catch format drift between git versions — the thing that
-actually breaks a graph. They need `git` 2.17 or later on your `PATH`.
+actually breaks a graph. They need `git` 2.17 or later on your `PATH`; the
+SHA-256 and `--force-if-includes` tests skip themselves on a git too old for
+them.
+
+The webview tests run the real graph bundle in jsdom. What only exists inside
+VS Code — activation, the graph tab, the Changes view, the `git-graph-next:`
+file system — is checked by hand: press <kbd>F5</kbd> and try what you changed.
 
 ## How the code is arranged
 
@@ -84,6 +90,16 @@ because that is the code a test can exercise directly.
   fights VS Code's built-in Git extension. `GIT_OPTIONAL_LOCKS=0` handles this;
   do not undo it.
 - **Destructive actions say so** before they run, and show what they will do.
+- **Hashes are 40 or 64 digits.** SHA-256 repositories exist, and Git 3.0 plans to
+  make them the default. Check a hash with `isFullHash` from `src/types.ts`; never
+  write `{40}`.
+- **The layout is checked against a reference.** `test/layoutReference.ts` is
+  the plain, scanning version of `layoutGraph`; a random-history test requires
+  both to draw the same picture. Change the reference only when the picture is
+  meant to change.
+- **Everything works from the keyboard.** A new row, menu or dialog needs a
+  keyboard path and a name a screen reader can read (`aria-label`); the table's
+  own keys are in `CommitTable.onKey`.
 - Comments explain *why*, not *what*. The existing code is a good guide to the
   level of detail expected.
 - Tabs for indentation, single quotes, semicolons — match the file you are in.
@@ -91,7 +107,9 @@ because that is the code a test can exercise directly.
 ## Pull requests
 
 Run `npm run typecheck` and `npm test` before pushing; CI runs both on Linux,
-macOS and Windows, and a red build is the usual reason a PR waits.
+macOS and Windows, and a red build is the usual reason a PR waits. When you
+touch `src/extension.ts`, `src/view/` or `package.json`, also try the change in
+an Extension Development Host (<kbd>F5</kbd>).
 
 Describe what the change does and why. If it fixes something a user reported,
 link the issue. If it changes behaviour anyone would notice, update `README.md`

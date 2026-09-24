@@ -7,6 +7,9 @@ All notable changes to Git Graph Next are listed here.
 ### Graph
 
 - Fast, virtualised commit graph: only visible rows are drawn, so 100,000 commits scroll like 100.
+- Laying out the graph takes the same time with 2 branches open side by side as with 20,000.
+- SHA-256 repositories (`git init --object-format=sha256`) as well as SHA-1 ones.
+- Refreshes by itself after a commit, checkout or fetch — also in linked worktrees and submodules, whose git data lives outside the working tree — but not for builds that only write files git ignores.
 - Rounded or angular edges, configurable colours, sticky column header.
 - Branch, remote-branch and tag labels; local and remote labels folded together when they point at the same commit.
 - Uncommitted Changes row and stash rows in the graph.
@@ -39,7 +42,7 @@ All notable changes to Git Graph Next are listed here.
 
 - Checkout, create, rename and delete branches (also on the remote), delete several at once.
 - Create, push and delete tags.
-- Fetch, pull and push (with `--force-with-lease`).
+- Fetch, pull and push. A force-push goes with a lease plus `--force-if-includes` (git 2.30+), so it refuses to overwrite commits that only a background fetch has brought in.
 - Merge, rebase, cherry-pick, revert and reset; on several selected commits too.
 - Interactive rebase edited in a VS Code editor; squash or drop selected commits; fixup commits and autosquash.
 - Stash, apply, pop, drop, and create a branch from a stash.
@@ -50,8 +53,19 @@ All notable changes to Git Graph Next are listed here.
 - Check out and force-push tags; fetch without tags; "Current Branch (HEAD)" in the branch filter.
 - Copy or open a commit's web link; plain web addresses in messages are links.
 - A HEAD button to jump to the checked-out commit; Show Git Output with every command the actions ran.
-- Author avatars, off by default.
-- Passwords and SSH key passphrases are asked for in VS Code, so pushing and pulling work without a credential helper.
+- Author avatars, off by default, cached on disk in the extension's own storage.
+- Passwords and SSH key passphrases are asked for in VS Code, so pushing and pulling work without a credential helper. When git still cannot ask, **Run in Terminal** quotes the command for the shell it opens: PowerShell, Command Prompt or a POSIX shell.
 - Staged and working tree changes as separate rows, with Stage All and Unstage All.
 - Several graph tabs at once; Go to Branch, Tag or Stash; open the graph automatically on startup.
 - Compare any commit with the working tree; hovering a commit brings out its branch line; a detached HEAD is shown in the graph; many refs on one commit fold into "+N".
+
+### Keyboard and screen readers
+
+- Arrow keys, Page Up/Down, Home and End move through the history; Shift extends the selection.
+- The menu key or Shift+F10 opens the context menu of the selected commit, with each of its branches and tags one entry away.
+- The commit list, its menus and the changed files are announced to screen readers, one sentence per commit or file.
+
+### Security
+
+- Files at a revision (`git-graph-next:` URIs) are served only for repositories the extension knows and for full commit hashes or the index; nothing else reaches git.
+- Paths sent back by the graph view are checked to stay inside the repository before a file is opened.

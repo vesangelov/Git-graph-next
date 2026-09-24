@@ -13,6 +13,7 @@ Open the graph from the **Git Graph Next** icon in the Activity Bar, the **Git G
 - **Ctrl/Cmd+click** or **Shift+click** to select several commits — two selected commits are compared.
 - **Double-click** a branch label to check it out.
 - **Ctrl/Cmd+F** to search.
+- **Keyboard**: the arrow keys, Page Up/Down, Home and End move through the history, **Shift** extends the selection, and the menu key or **Shift+F10** opens the actions of the selected commit — and of its branches and tags.
 
 ## Features
 
@@ -51,7 +52,7 @@ Open the graph from the **Git Graph Next** icon in the Activity Bar, the **Git G
 
 ![The context menu of a branch](media/screenshots/menu.png)
 
-- **Branches**: check out, create, rename, delete (also on the remote), delete several at once, merge, rebase, push, pull.
+- **Branches**: check out, create, rename, delete (also on the remote), delete several at once, merge, rebase, pull and push. A force-push goes with a lease that also refuses to overwrite commits that only a background fetch has brought in — work you have never seen stays on the remote.
 - **Commits**: cherry-pick, revert, reset, create a branch or tag, check out.
 - **Several commits**: cherry-pick, revert, squash or drop them together.
 - **Interactive rebase** in a normal VS Code editor: reorder the list, change `pick` to `reword`, `squash`, `fixup`, `edit` or `drop`, then **Start Rebase**.
@@ -64,6 +65,12 @@ Open the graph from the **Git Graph Next** icon in the Activity Bar, the **Git G
 - When a merge, rebase, cherry-pick or revert stops at a conflict, a banner offers **Continue** and **Abort**.
 
 Every action shows exactly what it will do before it runs, and destructive ones are marked as such. When git or ssh needs a password or a key passphrase, it is asked for in VS Code. **Show Git Output** (in **More**) lists every git command the actions ran.
+
+### Keyboard and screen readers
+
+- Everything a right-click offers is reachable without a mouse: select a commit with the arrow keys, then press the menu key or **Shift+F10**. The commit's branches and tags are listed first, each opening its own actions.
+- Screen readers read each commit as one sentence — its message, branches and tags, author, date and hash — and follow the selection as it moves. Changed files are read the same way, and **Enter** opens a file's diff.
+- Menus follow the arrow keys, **Home** and **End**; **Escape** closes them and puts focus back where it was.
 
 ## Settings
 
@@ -86,7 +93,7 @@ All settings are under **Git Graph Next** in the Settings editor. The ones most 
 
 ## Performance
 
-Tested on a repository with 100,000 commits and 20,000 branches: laying out all 100,000 commits takes under a tenth of a second, and scrolling costs the same at any size. Most of the time goes into `git log` itself, which is much faster when the repository has a *commit-graph* file. Recent versions of git write one during `git gc`; you can also write it yourself:
+Only the rows on screen are drawn, whatever the length of the history. Laying out 100,000 commits takes around a fifth of a second the first time and a few tens of milliseconds after that, and the time does not grow with the number of branches open side by side — measured with 2 and with 20,000, and kept that way by a test. Most of the time goes into `git log` itself, which is much faster when the repository has a *commit-graph* file. Recent versions of git write one during `git gc`; you can also write it yourself:
 
 ```sh
 git commit-graph write --reachable
@@ -94,17 +101,18 @@ git commit-graph write --reachable
 
 ## Requirements
 
-- Git 2.17 or later on your `PATH`, or set in `git-graph-next.git.path` (or VS Code's `git.path`).
+- Git 2.17 or later on your `PATH`, or set in `git-graph-next.git.path` (or VS Code's `git.path`). Guarding a force-push against a background fetch needs git 2.30; older versions use a plain lease.
 - VS Code 1.85 or later. Only public VS Code APIs are used, so VSCodium and remote windows (SSH, containers, WSL) are supported too.
+- Works in SHA-1 and SHA-256 repositories (`git init --object-format=sha256`), and in linked worktrees and submodules — a commit made in a terminal there shows up in the graph as well.
 - Git Graph Next runs git in your workspace, so it is disabled in untrusted workspaces.
 
 ## Privacy
 
-Git Graph Next collects no data. It talks to the network only when you fetch, pull or push, through your own git — and, if you turn on `git-graph-next.fetchAvatars`, to fetch avatars: for each author shown, the MD5 hash of their e-mail address is sent to Gravatar (or their user name to GitHub, for GitHub no-reply addresses). Avatars are off by default.
+Git Graph Next collects no data. It talks to the network only when you fetch, pull or push, through your own git — and, if you turn on `git-graph-next.fetchAvatars`, to fetch avatars: for each author shown, the MD5 hash of their e-mail address is sent to Gravatar (or their user name to GitHub, for GitHub no-reply addresses). Avatars are off by default; when on, they are cached on disk in the extension's own storage, and **Git Graph Next: Clear Avatar Cache** removes them.
 
 ## Feedback and bug reports
 
-Bugs, feature requests, questions and anything else are welcome.
+This is the first release, published as a preview. Bugs, feature requests, questions and anything else are welcome.
 
 - **Issues:** <https://github.com/vesangelov/Git-graph-next/issues> — the best place for anything that others may hit too.
 - **E-mail:** <vesangelovdev@gmail.com> — for anything you would rather not file in public.

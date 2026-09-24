@@ -36,10 +36,20 @@ Knowing the shape of it makes reports easier to judge.
   `innerHTML`, and runs under a Content-Security-Policy with `default-src
   'none'`, no `unsafe-inline`, and a per-load nonce on the only script.
 - **The webview is treated as untrusted by the host.** Values it posts back are
-  validated before they reach a git argument list: commit hashes must be 40 hex
-  characters, repository paths must be ones already known, ref names may not
-  begin with `-` or contain control characters, and extra `git log` arguments
-  are checked against an explicit list of what is refused.
+  validated before they reach a git argument list: commit hashes must be full
+  ones (40 hex digits, or 64 in a SHA-256 repository), repository paths must be
+  ones already known, file paths must stay inside the repository, ref names may
+  not begin with `-` or contain control characters, and extra `git log`
+  arguments are checked against an explicit list of what is refused.
+- **Files at a revision are served through a `git-graph-next:` URI scheme**,
+  which VS Code registers for the whole window — so anything that can make VS
+  Code open a URI can hand one in. The extension serves only what it could have
+  made itself: a repository it knows, a full commit hash or the index, and a path
+  inside the repository. Anything else is refused before git runs.
+- **A force-push never overwrites work you have not seen.** It goes with
+  `--force-with-lease` and, on git 2.30 or later, `--force-if-includes`: a lease
+  alone is checked against the remote-tracking branch, which a background fetch
+  moves to the remote's tip, after which it protects nothing.
 - **It talks to the network only through your git** when you fetch, pull or
   push — with one opt-in exception below.
 
