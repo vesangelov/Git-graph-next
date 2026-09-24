@@ -653,7 +653,7 @@
         "git-graph-next.integratedTerminalShell": {
           "type": "string",
           "default": "",
-          "description": "Shell executable used when the graph opens an Integrated Terminal (e.g. for interactive rebase).",
+          "markdownDescription": "Shell for the terminal that **Run in Terminal** opens, when a push, pull or fetch needs credentials git could not ask for in VS Code. Empty uses your default terminal profile. The command is quoted for the shell it will run in: PowerShell, Command Prompt, or a POSIX shell such as bash.",
           "scope": "machine"
         }
       }
@@ -724,5 +724,6 @@
     "email": "vesangelovdev@gmail.com"
   },
   "qna": "https://github.com/vesangelov/Git-graph-next/issues",
-  "pricing": "Free"
+  "pricing": "Free",
+  "preview": true
 }
