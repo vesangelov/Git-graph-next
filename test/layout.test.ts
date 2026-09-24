@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { layoutGraph } from '../src/graph/layout.ts';
+import { referenceLayout } from './layoutReference.ts';
 import type { Commit } from '../src/types.ts';
 
 /** Builds a commit whose hash is a readable stand-in for a real object id. */
@@ -164,4 +165,71 @@ test('every edge references a real row and column', () => {
 			'an edge must point downwards to a loaded row');
 		assert.ok(edge.laneColumn >= 0 && edge.laneColumn < layout.width);
 	}
+});
+
+/** A small seeded generator, so a failing random graph can be reproduced. */
+function random(seed: number): () => number {
+	return () => {
+		seed = (seed + 0x6d2b79f5) | 0;
+		let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+/**
+ * A random history in display order: every parent comes later in the list,
+ * or is missing from it altogether (not loaded yet), with merges, octopus
+ * merges, roots, and several tips sharing one parent.
+ */
+function randomHistory(next: () => number, size: number): Commit[] {
+	const name = (i: number) => `r${i}`;
+	const commits: Commit[] = [];
+	for (let i = 0; i < size; i++) {
+		const roll = next();
+		const count = i === size - 1 || roll < 0.04 ? 0 : roll < 0.8 ? 1 : roll < 0.97 ? 2 : 3;
+		const parents = new Set<string>();
+		for (let p = 0; p < count; p++) {
+			// Mostly near, sometimes far, sometimes beyond what is loaded.
+			const reach = next() < 0.85 ? 1 + Math.floor(next() * 4) : 1 + Math.floor(next() * size);
+			parents.add(name(i + reach));
+		}
+		commits.push(commit(name(i), ...parents));
+	}
+	return commits;
+}
+
+test('draws exactly what the scanning layout drew, on random histories', () => {
+	const next = random(20260924);
+	for (let round = 0; round < 400; round++) {
+		const commits = randomHistory(next, 1 + Math.floor(next() * (round < 350 ? 60 : 400)));
+		const pick = () => commits[Math.floor(next() * commits.length)].hash;
+		const options = {
+			colourCount: 1 + Math.floor(next() * 12),
+			pinnedBranches: Array.from({ length: Math.floor(next() * 3) }, (_, i) => ({ hash: pick(), name: `pin${i}` })),
+			laneColours: new Map(Array.from({ length: Math.floor(next() * 3) }, () => [pick(), 20 + Math.floor(next() * 3)] as const)),
+			dashedRows: new Set(next() < 0.3 ? [commits[0].hash] : [])
+		};
+		assert.deepEqual(layoutGraph(commits, options), referenceLayout(commits, options), `random history #${round}`);
+	}
+});
+
+test('stays fast with thousands of branches open at once', () => {
+	// The shape that made the scanning layout quadratic: many tips at the top,
+	// all of them open until far down the history. 100,000 commits with 5,000
+	// open branches took about nine seconds before lanes were indexed.
+	const open = 5_000;
+	const size = 100_000;
+	const commits: Commit[] = [];
+	for (let b = 0; b < open; b++) commits.push(commit(`tip${b}`, `m${size - 1 - (b % 1000)}`));
+	for (let i = 0; i < size - open; i++) commits.push(commit(`m${i}`, ...(i + 1 < size ? [`m${i + 1}`] : [])));
+
+	const started = performance.now();
+	const layout = layoutGraph(commits);
+	const elapsed = performance.now() - started;
+
+	assert.equal(layout.vertices.length, size);
+	assert.equal(layout.width, open + 1);
+	// Generous, so a slow CI machine passes; a quadratic regression does not.
+	assert.ok(elapsed < 3000, `took ${Math.round(elapsed)} ms`);
 });

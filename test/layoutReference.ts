@@ -1,4 +1,9 @@
-import type { Commit, GraphEdge, GraphLayout, GraphVertex, Hash, PinnedBranch } from '../types.ts';
+/**
+ * The lane-allocation sweep as it was before lanes were indexed by the commit
+ * they wait for: a plain linear scan per commit. Kept verbatim as the
+ * reference the indexed version must match exactly, on any graph.
+ */
+import type { Commit, GraphEdge, GraphLayout, GraphVertex, Hash, PinnedBranch } from '../src/types.ts';
 
 /**
  * A column of the graph that is waiting for a particular commit to appear.
@@ -25,7 +30,7 @@ interface PendingEdge {
 	readonly dashed: boolean;
 }
 
-export interface LayoutOptions {
+interface LayoutOptions {
 	/**
 	 * Branches reserved a column of their own, in priority order. Their line is
 	 * drawn straight down the graph instead of weaving between lanes (#207).
@@ -51,51 +56,6 @@ const DEFAULT_OPTIONS: LayoutOptions = {
 	laneColours: new Map()
 };
 
-
-/**
- * The columns of lanes that are free to take, smallest first. Entries are
- * not removed when a column is taken; a stale one is skipped when it comes
- * up, which keeps both operations O(log n).
- */
-class FreeColumns {
-	private readonly heap: number[] = [];
-
-	push(column: number): void {
-		const heap = this.heap;
-		heap.push(column);
-		let i = heap.length - 1;
-		while (i > 0) {
-			const parent = (i - 1) >> 1;
-			if (heap[parent] <= heap[i]) break;
-			[heap[parent], heap[i]] = [heap[i], heap[parent]];
-			i = parent;
-		}
-	}
-
-	/** Removes and returns the smallest column, or undefined when there is none. */
-	pop(): number | undefined {
-		const heap = this.heap;
-		if (heap.length === 0) return undefined;
-		const top = heap[0];
-		const last = heap.pop()!;
-		if (heap.length > 0) {
-			heap[0] = last;
-			let i = 0;
-			for (;;) {
-				const left = 2 * i + 1;
-				const right = left + 1;
-				let smallest = i;
-				if (left < heap.length && heap[left] < heap[smallest]) smallest = left;
-				if (right < heap.length && heap[right] < heap[smallest]) smallest = right;
-				if (smallest === i) break;
-				[heap[smallest], heap[i]] = [heap[i], heap[smallest]];
-				i = smallest;
-			}
-		}
-		return top;
-	}
-}
-
 /**
  * Assigns each commit a column and colour, and produces the edges between them.
  *
@@ -108,25 +68,12 @@ class FreeColumns {
  * lanes of their own. The first parent inherits the commit's lane and colour,
  * which is what keeps a long-lived branch a single straight line of one colour
  * rather than a rainbow that changes at every merge (#254).
- *
- * Lanes are indexed by the commit they wait for, and free columns are kept in
- * a heap, so placing a commit does not scan every open lane. A scan made the
- * sweep quadratic in the number of branches open at once: 100,000 commits
- * with 5,000 open branches took seconds, and the webview froze meanwhile.
- * `test/layout.test.ts` checks this against the scanning version on random
- * graphs, so the two always draw the same picture.
  */
-export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutOptions> = {}): GraphLayout {
+export function referenceLayout(commits: readonly Commit[], options: Partial<LayoutOptions> = {}): GraphLayout {
 	const opts: LayoutOptions = { ...DEFAULT_OPTIONS, ...options };
 	const lanes: (Lane | null)[] = [];
 	const vertices: GraphVertex[] = [];
 	const edges: GraphEdge[] = [];
-	/**
-	 * Columns of the lanes waiting for each commit. Nearly always one, kept as
-	 * a plain number; a set only when several branches wait for the same commit.
-	 */
-	const waiting = new Map<Hash, number | Set<number>>();
-	const free = new FreeColumns();
 	let nextColour = 0;
 
 	const takeColour = (): number => {
@@ -135,67 +82,20 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 		return colour;
 	};
 
-	const unindex = (hash: Hash, column: number): void => {
-		const columns = waiting.get(hash);
-		if (columns === undefined) return;
-		if (typeof columns === 'number') {
-			if (columns === column) waiting.delete(hash);
-			return;
-		}
-		columns.delete(column);
-		if (columns.size === 1) waiting.set(hash, columns.values().next().value!);
-		else if (columns.size === 0) waiting.delete(hash);
-	};
-
-	const index = (hash: Hash, column: number): void => {
-		const columns = waiting.get(hash);
-		if (columns === undefined) waiting.set(hash, column);
-		else if (typeof columns === 'number') waiting.set(hash, new Set([columns, column]));
-		else columns.add(column);
-	};
-
-	/** Every write to `lanes` goes through here, so the index and the free list stay true. */
-	const setLane = (column: number, lane: Lane | null): void => {
-		const previous = lanes[column];
-		if (previous != null && previous.expects !== '') unindex(previous.expects, column);
-		lanes[column] = lane;
-		if (lane === null) free.push(column);
-		else if (lane.expects !== '') index(lane.expects, column);
-	};
-
-	/** The columns of the lanes waiting for `hash`, left to right. */
-	const lanesWaitingFor = (hash: Hash): number[] => {
-		const columns = waiting.get(hash);
-		if (columns === undefined) return [];
-		if (typeof columns === 'number') return [columns];
-		return [...columns].sort((a, b) => a - b);
-	};
-
-	/** The leftmost lane waiting for `hash`, or -1. */
-	const leftmostWaiting = (hash: Hash): number => {
-		const columns = waiting.get(hash);
-		if (columns === undefined) return -1;
-		if (typeof columns === 'number') return columns;
-		let leftmost = -1;
-		for (const column of columns) if (leftmost === -1 || column < leftmost) leftmost = column;
-		return leftmost;
-	};
-
 	// Reserve the leftmost columns for pinned branches before anything else, so
 	// their column index never depends on the order commits happen to arrive.
 	const pinnedColumns = new Map<Hash, number>();
 	for (const branch of opts.pinnedBranches) {
 		if (pinnedColumns.has(branch.hash)) continue;
 		const column = lanes.length;
-		lanes.push(null);
-		setLane(column, { expects: branch.hash, colour: opts.laneColours.get(branch.hash) ?? takeColour(), pending: [], pinned: true });
+		lanes.push({ expects: branch.hash, colour: opts.laneColours.get(branch.hash) ?? takeColour(), pending: [], pinned: true });
 		pinnedColumns.set(branch.hash, column);
 	}
 
 	/** Leftmost column with no live lane, extending the array when full. */
 	const firstFreeColumn = (): number => {
-		for (let column = free.pop(); column !== undefined; column = free.pop()) {
-			if (column < lanes.length && lanes[column] === null) return column;
+		for (let i = 0; i < lanes.length; i++) {
+			if (lanes[i] === null) return i;
 		}
 		lanes.push(null);
 		return lanes.length - 1;
@@ -206,7 +106,10 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 
 		// Every lane awaiting this commit converges here. The leftmost one wins
 		// the column; the rest are drawn into it and released.
-		const matching = lanesWaitingFor(commit.hash);
+		const matching: number[] = [];
+		for (let column = 0; column < lanes.length; column++) {
+			if (lanes[column]?.expects === commit.hash) matching.push(column);
+		}
 
 		let column: number;
 		let colour: number;
@@ -239,7 +142,7 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 			// Release the merged-in lanes, but keep a pinned column reserved so
 			// the branch it belongs to stays in the same place further down.
 			if (matchedColumn !== column) {
-				setLane(matchedColumn, lane.pinned ? { ...lane, expects: '', pending: [] } : null);
+				lanes[matchedColumn] = lane.pinned ? { ...lane, expects: '', pending: [] } : null;
 			}
 		}
 
@@ -253,20 +156,20 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 		if (firstParent === undefined) {
 			// A root commit ends its lane, unless the column is reserved.
 			const lane = lanes[column];
-			setLane(column, lane != null && lane.pinned ? { ...lane, expects: '', pending: [] } : null);
+			lanes[column] = lane !== null && lane.pinned ? { ...lane, expects: '', pending: [] } : null;
 		} else {
-			setLane(column, {
+			lanes[column] = {
 				expects: firstParent,
 				colour,
 				pending: [{ fromIndex: index, fromColumn: column, laneColumn: column, colour, dashed }],
 				pinned: lanes[column]?.pinned ?? false
-			});
+			};
 		}
 
 		for (const parent of otherParents) {
 			// Join an existing lane heading for the same parent rather than
 			// opening a duplicate one beside it.
-			const existing = leftmostWaiting(parent);
+			const existing = lanes.findIndex((lane) => lane !== null && lane.expects === parent);
 			if (existing !== -1) {
 				lanes[existing]!.pending.push({
 					fromIndex: index,
@@ -281,13 +184,20 @@ export function layoutGraph(commits: readonly Commit[], options: Partial<LayoutO
 			const parentColumn = pinnedColumns.get(parent) ?? firstFreeColumn();
 			const parentColour = opts.laneColours.get(parent) ?? takeColour();
 			const reserved = lanes[parentColumn];
-			const laneColour = reserved?.pinned === true ? reserved.colour : parentColour;
-			setLane(parentColumn, {
+			lanes[parentColumn] = {
 				expects: parent,
-				colour: laneColour,
-				pending: [{ fromIndex: index, fromColumn: column, laneColumn: parentColumn, colour: laneColour, dashed }],
+				colour: reserved?.pinned === true ? reserved.colour : parentColour,
+				pending: [
+					{
+						fromIndex: index,
+						fromColumn: column,
+						laneColumn: parentColumn,
+						colour: reserved?.pinned === true ? reserved.colour : parentColour,
+						dashed
+					}
+				],
 				pinned: reserved?.pinned ?? false
-			});
+			};
 		}
 	}
 
