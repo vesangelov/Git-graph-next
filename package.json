@@ -2,9 +2,9 @@
   "name": "git-graph-next",
   "displayName": "Git Graph Next",
   "description": "A fast, interactive Git graph for VS Code: browse and search your history, review a branch like a pull request, and branch, merge, rebase, cherry-pick and stash straight from the graph.",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "license": "MIT",
-  "publisher": "git-graph-next",
+  "publisher": "vesangelov",
   "engines": {
     "vscode": "^1.85.0"
   },

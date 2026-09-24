@@ -2,7 +2,7 @@
 
 All notable changes to Git Graph Next are listed here.
 
-## 0.1.0 — first release
+## 1.0.0 — first release
 
 ### Graph
 

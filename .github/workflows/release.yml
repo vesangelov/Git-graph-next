@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes the extension when a version tag (v0.1.0, …) is pushed.
+# Publishes the extension when a version tag (v1.0.0, …) is pushed.
 # Each store is skipped unless its token is configured as a repository secret:
 #   VSCE_PAT  — Visual Studio Marketplace (Azure DevOps personal access token)
 #   OVSX_PAT  — Open VSX, the registry VSCodium and other VS Code builds use
