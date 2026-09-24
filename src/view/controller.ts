@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import type { GitExecutor } from '../git/executor.ts';
 import { loadGraphData, readNote } from '../git/graphData.ts';
+import { externalGitDirectories, ignoredPaths } from '../git/repository.ts';
 import { searchHistory } from '../git/search.ts';
 import { parseQuery } from '../search/query.ts';
 import type { RepoManager } from '../repoManager.ts';
@@ -44,6 +45,13 @@ function isValidChange(change: unknown): boolean {
 /** Quiet period after the last file change before the graph reloads. */
 const REFRESH_DEBOUNCE_MS = 750;
 
+/**
+ * Past this many changed files in one quiet period, reload without asking git
+ * which of them it ignores: a checkout or a big build, where the answer is
+ * almost certainly "reload anyway".
+ */
+const MAX_WEIGHED_PATHS = 500;
+
 /** Services every graph view needs. */
 export interface GraphServices {
 	readonly extensionUri: vscode.Uri;
@@ -83,6 +91,8 @@ export class GraphController implements vscode.Disposable {
 	private watcher: vscode.Disposable | undefined;
 	private watchedRepo: string | null = null;
 	private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Changes seen since the last reload: whether git's own data changed, and which working-tree paths did. */
+	private pending: { git: boolean; paths: Set<string> } = { git: false, paths: new Set() };
 	/** A change arrived while hidden; reload when shown again. */
 	private stale = false;
 	/** The options of the load currently on screen, reused to refresh it. */
@@ -396,22 +406,60 @@ export class GraphController implements vscode.Disposable {
 	 * checkout, a fetch, or an edit to a tracked file. Object writes and lock
 	 * files are ignored; they accompany the ref or index change that matters and
 	 * would otherwise trigger a reload per object.
+	 *
+	 * Changes are collected over a quiet period, then weighed once: a change to
+	 * git's own data always reloads; changes that are all to files git ignores
+	 * (a build writing `dist/`) do not, since they cannot alter the graph.
 	 */
 	private watch(repo: string | null): void {
 		if (repo === this.watchedRepo) return;
 		this.watcher?.dispose();
 		this.watcher = undefined;
+		clearTimeout(this.refreshTimer);
+		this.pending = { git: false, paths: new Set() };
 		this.watchedRepo = repo;
 		if (repo === null) return;
 
-		const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(repo), '**'));
+		const disposables: vscode.Disposable[] = [];
 		const onChange = (uri: vscode.Uri) => {
 			const path = uri.path;
 			if (path.includes('/.git/objects/') || path.endsWith('.lock') || path.includes('/.git/logs/')) return;
+			const inTree = relative(repo, uri.fsPath);
+			const isGit = inTree === '' || inTree.startsWith('..') || isAbsolute(inTree) || inTree.split(sep)[0] === '.git';
+			if (isGit || this.pending.paths.size >= MAX_WEIGHED_PATHS) this.pending.git = true;
+			else this.pending.paths.add(inTree.split(sep).join('/'));
 			clearTimeout(this.refreshTimer);
-			this.refreshTimer = setTimeout(() => this.reload(), REFRESH_DEBOUNCE_MS);
+			this.refreshTimer = setTimeout(() => void this.settle(repo), REFRESH_DEBOUNCE_MS);
 		};
-		this.watcher = vscode.Disposable.from(watcher, watcher.onDidChange(onChange), watcher.onDidCreate(onChange), watcher.onDidDelete(onChange));
+		const follow = (pattern: vscode.RelativePattern) => {
+			const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+			disposables.push(watcher, watcher.onDidChange(onChange), watcher.onDidCreate(onChange), watcher.onDidDelete(onChange));
+		};
+		follow(new vscode.RelativePattern(vscode.Uri.file(repo), '**'));
+		this.watcher = new vscode.Disposable(() => {
+			for (const disposable of disposables.splice(0)) disposable.dispose();
+		});
+
+		// A linked worktree or a submodule keeps HEAD, its index and its refs
+		// outside the working tree; follow those too, or a commit made in a
+		// terminal there never shows. Only the files that matter: not objects.
+		void externalGitDirectories(this.services.git, repo).then((dirs) => {
+			if (dirs === null || this.watchedRepo !== repo) return;
+			follow(new vscode.RelativePattern(vscode.Uri.file(dirs.gitDir), '*'));
+			if (dirs.commonDir !== dirs.gitDir) follow(new vscode.RelativePattern(vscode.Uri.file(dirs.commonDir), '*'));
+			follow(new vscode.RelativePattern(vscode.Uri.file(join(dirs.commonDir, 'refs')), '**'));
+		});
+	}
+
+	/** Reloads for the changes gathered over the last quiet period, unless git ignores every one. */
+	private async settle(repo: string): Promise<void> {
+		const { git, paths } = this.pending;
+		this.pending = { git: false, paths: new Set() };
+		if (!git && paths.size > 0) {
+			const ignored = await ignoredPaths(this.services.git, repo, [...paths]);
+			if ([...paths].every((path) => ignored.has(path))) return;
+		}
+		if (this.watchedRepo === repo) this.reload();
 	}
 
 	private html(): string {

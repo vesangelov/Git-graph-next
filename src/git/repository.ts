@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { GitExecutor } from './executor.ts';
 
 /**
@@ -117,4 +117,48 @@ export function dedupePaths(paths: readonly string[]): string[] {
 		result.push(path);
 	}
 	return result;
+}
+
+/** Where a repository's git data lives, when that is not simply `<root>/.git`. */
+export interface GitDirectories {
+	/** This working tree's own git directory: HEAD, index, `MERGE_HEAD`, … */
+	readonly gitDir: string;
+	/** The directory shared by all worktrees: refs, `packed-refs`, `FETCH_HEAD`. */
+	readonly commonDir: string;
+}
+
+/**
+ * The git directories of a repository that lie outside its working tree, or
+ * null when everything is in `<root>/.git`.
+ *
+ * A linked worktree keeps HEAD and its index in `<main>/.git/worktrees/<name>`
+ * and its branches in `<main>/.git/refs`; a submodule keeps everything in the
+ * superproject's `.git/modules/<name>`. A commit made in either changes
+ * nothing inside the working tree itself, so watching only the working tree
+ * never notices it.
+ */
+export async function externalGitDirectories(git: GitExecutor, root: string): Promise<GitDirectories | null> {
+	const output = await git.runOrNull(root, ['rev-parse', '--absolute-git-dir', '--git-common-dir']);
+	const [gitDir, commonDir] = (output ?? '').split('\n').map((line) => line.trim());
+	if (gitDir === undefined || gitDir === '' || commonDir === undefined || commonDir === '') return null;
+	// `--git-common-dir` is relative to the directory git ran in, unless absolute.
+	const resolved = { gitDir: resolve(gitDir), commonDir: resolve(root, commonDir) };
+	const inside = (dir: string) => {
+		const rel = relative(normaliseRepoPath(root), normaliseRepoPath(dir));
+		return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+	};
+	return inside(resolved.gitDir) && inside(resolved.commonDir) ? null : resolved;
+}
+
+/**
+ * The paths among `paths` (repo-relative, forward slashes) that git ignores:
+ * build output, dependencies, anything `.gitignore` covers. A change to one
+ * cannot alter the graph or the uncommitted changes, so it need not reload.
+ * Tracked files are never reported, even when a pattern matches them.
+ */
+export async function ignoredPaths(git: GitExecutor, root: string, paths: readonly string[]): Promise<Set<string>> {
+	if (paths.length === 0) return new Set();
+	// Exit code 1 means "none ignored", which is an answer, not a failure.
+	const output = await git.runOrNull(root, ['check-ignore', '--stdin', '-z'], { stdin: `${paths.join('\0')}\0`, ignoreExitCode: true });
+	return new Set((output ?? '').split('\0').filter((path) => path !== ''));
 }
